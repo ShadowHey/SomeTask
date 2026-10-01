@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { uploadAudioFile, UploadProgress } from "@/lib/upload";
+import { UploadModal } from "@/components/upload/UploadModal";
 import type { RecordingListItem } from "@/types";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -13,9 +14,7 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   
-  // Upload State
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
   const fetchRecordings = useCallback(async () => {
     try {
@@ -34,7 +33,6 @@ export default function Dashboard() {
 
     const initialLoad = window.setTimeout(() => void fetchRecordings(), 0);
 
-    // Refresh while the dashboard is open so background status changes appear.
     const interval = setInterval(() => {
       void fetchRecordings();
     }, 5000);
@@ -45,35 +43,10 @@ export default function Dashboard() {
     };
   }, [fetchRecordings, isAuthLoading]);
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Reset input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-
-    try {
-      await uploadAudioFile(file, (progress) => {
-        setUploadProgress(progress);
-      });
-      
-      // Refresh list immediately after upload completes
-      await fetchRecordings();
-      
-      // Clear progress after a moment
-      setTimeout(() => setUploadProgress(null), 2000);
-    } catch (err) {
-      console.error(err);
-      // Keep error message visible for a bit longer
-      setTimeout(() => setUploadProgress(null), 5000);
-    }
-  };
-
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "completed": return "bg-green-100 text-green-800";
+      case "transcription_completed": return "bg-green-100 text-green-800";
+      case "transcription_failed": 
       case "failed": return "bg-red-100 text-red-800";
       case "deleted": return "bg-gray-100 text-gray-800";
       default: return "bg-blue-100 text-blue-800 animate-pulse";
@@ -92,45 +65,20 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="mt-4 sm:ml-4 sm:mt-0">
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            className="hidden"
-            accept=".wav,.mp3,.ogg,.flac,.aac,.m4a"
-          />
           <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadProgress !== null && uploadProgress.status !== 'success' && uploadProgress.status !== 'error'}
-            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50"
+            onClick={() => setIsUploadModalOpen(true)}
+            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
           >
             Upload Audio
           </button>
         </div>
       </div>
 
-      {uploadProgress && (
-        <div className={`mb-6 rounded-md p-4 border ${
-          uploadProgress.status === 'error' ? 'bg-red-50 border-red-200' :
-          uploadProgress.status === 'success' ? 'bg-green-50 border-green-200' :
-          'bg-blue-50 border-blue-200'
-        }`}>
-          <div className="flex justify-between mb-1">
-            <span className="text-sm font-medium text-gray-700">{uploadProgress.message}</span>
-            <span className="text-sm font-medium text-gray-700">{uploadProgress.progress}%</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2.5">
-            <div 
-              className={`h-2.5 rounded-full ${
-                uploadProgress.status === 'error' ? 'bg-red-600' :
-                uploadProgress.status === 'success' ? 'bg-green-600' :
-                'bg-blue-600'
-              } transition-all duration-300`} 
-              style={{ width: `${uploadProgress.progress}%` }}
-            ></div>
-          </div>
-        </div>
-      )}
+      <UploadModal 
+        isOpen={isUploadModalOpen} 
+        onClose={() => setIsUploadModalOpen(false)} 
+        onUploadSuccess={() => fetchRecordings()} 
+      />
 
       {error && (
         <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
@@ -160,7 +108,7 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-3">
                       <h3 className="truncate text-sm font-medium text-gray-900">{recording.original_filename}</h3>
                       <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusColor(recording.status)}`}>
-                        {recording.status.toUpperCase()}
+                        {recording.status.replace(/_/g, ' ').toUpperCase()}
                       </span>
                     </div>
                     <p className="mt-1 truncate text-xs text-gray-500">{recording.original_filename}</p>
@@ -175,7 +123,13 @@ export default function Dashboard() {
                       </p>
                     ) : (
                       <div className="mt-4 h-12 rounded bg-gray-50 flex items-center justify-center text-xs text-gray-400">
-                        {recording.status === "completed" ? "No summary available" : "Processing..."}
+                        {recording.summary_status === "completed" 
+                          ? "Summary available." 
+                          : recording.summary_status === "queued" || recording.summary_status === "processing"
+                          ? "Generating Summary..." 
+                          : recording.status === "transcription_completed"
+                          ? "Transcript ready. Generate Summary?"
+                          : "Processing Transcript..."}
                       </div>
                     )}
                   </div>

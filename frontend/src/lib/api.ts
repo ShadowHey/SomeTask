@@ -47,15 +47,19 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 export const api = {
   recordings: {
     // Called after direct Supabase Storage upload to enqueue the processing job
-    process: (note_id: string) =>
+    process: (note_id: string, config: any) =>
       fetchApi<RecordingDetail>("/recordings", {
         method: "POST",
-        body: JSON.stringify({ note_id }),
+        body: JSON.stringify({ note_id, config }),
       }),
     list: () =>
       fetchApi<RecordingListItem[]>("/recordings"),
     get: (id: string) =>
       fetchApi<RecordingDetail>(`/recordings/${id}`),
+    generateSummary: (id: string) =>
+      fetchApi<RecordingDetail>(`/recordings/${id}/summary`, {
+        method: "POST",
+      }),
     getAudioUrl: (id: string) =>
       fetchApi<{ url: string; expires_in: number }>(`/recordings/${id}/audio-url`),
     update: (id: string, original_filename: string) =>

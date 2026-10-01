@@ -35,29 +35,21 @@ class AudioNote(Base):
     original_filename: Mapped[str] = mapped_column(Text, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
 
-    status: Mapped[str] = mapped_column(
-        Enum(
-            "created",
-            "uploading",
-            "uploaded",
-            "queued",
-            "transcribing",
-            "summarizing",
-            "completed",
-            "failed",
-            name="audio_status",
-        ),
-        nullable=False,
-        server_default="created",
-    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="created")
+    
+    transcription_config: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    resolved_language: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    summary_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="not_requested")
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    summary_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     failure_stage: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failure_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -91,6 +83,10 @@ class TranscriptSegment(Base):
     start_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     end_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    speaker_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    language_detected: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

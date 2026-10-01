@@ -1,7 +1,18 @@
+export interface TranscriptionConfig {
+  language_code: string;
+  with_diarization?: boolean;
+  num_speakers?: number;
+  is_multi_channel?: boolean;
+  with_denoise?: boolean;
+  bias_list?: string[];
+  bias_score?: number;
+}
+
 export interface RecordingListItem {
   id: string;
   original_filename: string;
   status: string;
+  summary_status: string;
   size_bytes: number | null;
   duration_seconds: number | null;
   summary_preview: string | null;
@@ -16,6 +27,9 @@ export interface RecordingDetail {
   original_filename: string;
   storage_path: string;
   status: string;
+  summary_status: string;
+  transcription_config: TranscriptionConfig | null;
+  resolved_language: string | null;
   size_bytes: number | null;
   duration_seconds: number | null;
   created_at: string;
@@ -32,6 +46,9 @@ export interface TranscriptSegment {
   start_ms: number | null;
   end_ms: number | null;
   text: string;
+  speaker_id: number | null;
+  confidence: number | null;
+  language_detected: string | null;
 }
 
 export interface TranscriptSearchResult {

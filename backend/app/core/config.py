@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Batch language resolution is per file. hi-IN,en-IN is appropriate for the
     # supplied Hinglish sample, but does not promise segment-level code switching.
     gnani_default_language_code: str = "hi-IN,en-IN"
+    
+    # Webhook
+    gnani_webhook_url: str = ""
 
     # Gemini
     gemini_api_key: str = ""

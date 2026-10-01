@@ -27,7 +27,9 @@ export default function RecordingDetailPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<TranscriptSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const recordingStatus = recording?.status;
+  const summaryStatus = recording?.summary_status;
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -60,10 +62,28 @@ export default function RecordingDetailPage({
   }, [fetchRecording, isAuthLoading]);
 
   useEffect(() => {
-    if (!recordingStatus || ["completed", "failed"].includes(recordingStatus)) return;
+    if (!recordingStatus && !summaryStatus) return;
+    const isTranscribing = !["transcription_completed", "transcription_failed", "failed"].includes(recordingStatus || "");
+    const isSummarizing = summaryStatus === "queued" || summaryStatus === "processing";
+    
+    if (!isTranscribing && !isSummarizing) return;
+    
     const interval = window.setInterval(() => void fetchRecording(), 5_000);
     return () => window.clearInterval(interval);
-  }, [fetchRecording, recordingStatus]);
+  }, [fetchRecording, recordingStatus, summaryStatus]);
+
+  const handleGenerateSummary = async () => {
+    try {
+      setIsGeneratingSummary(true);
+      const updated = await api.recordings.generateSummary(id);
+      setRecording(updated);
+    } catch (err) {
+      console.error("Summary request failed", err);
+      alert("Failed to request summary generation");
+    } finally {
+      setIsGeneratingSummary(false);
+    }
+  };
 
   const handleRename = async () => {
     if (!editName.trim() || editName === recording?.original_filename) {
@@ -234,6 +254,11 @@ export default function RecordingDetailPage({
                             {Math.floor((segment.start_ms % 60000) / 1000).toString().padStart(2, '0')}
                           </>
                         ) : '--:--'}
+                        {segment.speaker_id !== null && segment.speaker_id !== undefined && (
+                          <div className="mt-1 text-xs text-blue-600 bg-blue-50 inline-block px-1 rounded">
+                            Speaker {segment.speaker_id}
+                          </div>
+                        )}
                       </div>
                       <p className="text-gray-800">{segment.text}</p>
                     </div>
@@ -251,13 +276,23 @@ export default function RecordingDetailPage({
 
           {/* Sidebar */}
           <div className="space-y-8">
-            {/* AI Summary Section */}
             <section className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 p-6 shadow-sm ring-1 ring-blue-100">
-              <div className="flex items-center space-x-2 mb-4">
-                <svg className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <h2 className="text-lg font-semibold text-gray-900">AI Summary</h2>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center space-x-2">
+                  <svg className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <h2 className="text-lg font-semibold text-gray-900">AI Summary</h2>
+                </div>
+                {recording.status === "transcription_completed" && recording.summary_status !== "completed" && recording.summary_status !== "processing" && recording.summary_status !== "queued" && (
+                  <button
+                    onClick={handleGenerateSummary}
+                    disabled={isGeneratingSummary}
+                    className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {isGeneratingSummary ? "Requesting..." : "Generate Summary"}
+                  </button>
+                )}
               </div>
               
               {recording.summary ? (
@@ -266,9 +301,13 @@ export default function RecordingDetailPage({
                 </div>
               ) : (
                 <p className="text-sm text-gray-500 italic">
-                  {recording.status === "completed" 
-                    ? "Summary generation failed or not available." 
-                    : "Generating smart summary..."}
+                  {recording.summary_status === "failed" 
+                    ? "Summary generation failed." 
+                    : recording.summary_status === "queued" || recording.summary_status === "processing" 
+                    ? "Generating smart summary..." 
+                    : recording.status !== "transcription_completed" 
+                    ? "Transcript must be completed first." 
+                    : "No summary available."}
                 </p>
               )}
             </section>
@@ -325,13 +364,33 @@ export default function RecordingDetailPage({
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Details</h2>
               <dl className="space-y-2">
                 <div className="flex justify-between">
-                  <dt className="font-medium text-gray-900">Status</dt>
-                  <dd className="capitalize">{recording.status}</dd>
+                  <dt className="font-medium text-gray-900">Transcription Status</dt>
+                  <dd className="capitalize">{recording.status.replace(/_/g, ' ')}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="font-medium text-gray-900">Summary Status</dt>
+                  <dd className="capitalize">{recording.summary_status || 'None'}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="font-medium text-gray-900">Uploaded</dt>
                   <dd>{new Date(recording.created_at).toLocaleString()}</dd>
                 </div>
+                <div className="flex justify-between">
+                  <dt className="font-medium text-gray-900">Config Language</dt>
+                  <dd>{recording.transcription_config?.language_code || 'N/A'}</dd>
+                </div>
+                {recording.resolved_language && (
+                  <div className="flex justify-between">
+                    <dt className="font-medium text-gray-900">Resolved Language</dt>
+                    <dd>{recording.resolved_language}</dd>
+                  </div>
+                )}
+                {recording.transcription_config?.with_diarization && (
+                  <div className="flex justify-between">
+                    <dt className="font-medium text-gray-900">Diarization</dt>
+                    <dd>Enabled ({recording.transcription_config.num_speakers} speakers)</dd>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <dt className="font-medium text-gray-900">Size</dt>
                   <dd>{recording.size_bytes ? (recording.size_bytes / (1024 * 1024)).toFixed(2) + ' MB' : 'Unknown'}</dd>

@@ -9,10 +9,20 @@ from pydantic import BaseModel, Field
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
+class TranscriptionConfig(BaseModel):
+    language_code: str = Field(default="en-IN", description="E.g., en-IN or hi-IN,en-IN")
+    with_diarization: bool = False
+    num_speakers: Optional[int] = Field(None, ge=1, le=2)
+    is_multi_channel: bool = False
+    with_denoise: bool = False
+    bias_list: Optional[list[str]] = Field(None, max_length=100)
+    bias_score: Optional[float] = Field(None)
+
 class ProcessNoteRequest(BaseModel):
     """Payload sent by the frontend after it successfully uploads a file to Supabase Storage."""
 
     note_id: uuid.UUID
+    config: TranscriptionConfig
 
 
 class AudioUrlResponse(BaseModel):
@@ -29,6 +39,7 @@ class RecordingListItem(BaseModel):
     id: uuid.UUID
     original_filename: str
     status: str
+    summary_status: str
     size_bytes: Optional[int] = None
     duration_seconds: Optional[float] = None
     summary_preview: Optional[str] = None
@@ -46,6 +57,9 @@ class TranscriptSegmentResponse(BaseModel):
     start_ms: Optional[int] = None
     end_ms: Optional[int] = None
     text: str
+    speaker_id: Optional[int] = None
+    confidence: Optional[float] = None
+    language_detected: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -54,6 +68,9 @@ class RecordingDetail(BaseModel):
     id: uuid.UUID
     original_filename: str
     status: str
+    summary_status: str
+    transcription_config: Optional[dict] = None
+    resolved_language: Optional[str] = None
     storage_path: str
     size_bytes: Optional[int] = None
     duration_seconds: Optional[float] = None

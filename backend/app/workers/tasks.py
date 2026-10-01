@@ -60,8 +60,11 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
         if processing_job and processing_job.status == JobStatus.RUNNING.value:
             logger.info("transcription_duplicate_skipped", note_id=str(note.id), attempt=attempt)
             return
-        if note.status in {AudioStatus.COMPLETED.value, AudioStatus.SUMMARIZING.value}:
-            logger.info("transcription_already_finished", note_id=str(note.id), status=note.status)
+        if note.status in {
+            AudioStatus.TRANSCRIPTION_COMPLETED.value,
+            AudioStatus.TRANSCRIPTION_PROCESSING.value,
+        }:
+            logger.info("transcription_already_processing_or_finished", note_id=str(note.id), status=note.status)
             return
 
         if processing_job is None:
@@ -75,47 +78,26 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
         else:
             processing_job.status = JobStatus.RUNNING.value
             processing_job.attempt_count = attempt
-        note.status = AudioStatus.TRANSCRIBING.value
+        note.status = AudioStatus.TRANSCRIPTION_STARTING.value
         await db.commit()
 
         try:
             provider = GnaniTranscriptionProvider()
-            provider_job_was_created = False
             if not processing_job.provider_job_id:
                 presigned_url = _signed_url_for_note(note)
+                config = note.transcription_config or {}
                 processing_job.provider_job_id = await provider.create_job(
-                    presigned_url, settings.gnani_default_language_code
+                    presigned_url, config, settings.gnani_webhook_url
                 )
                 await db.commit()
-                provider_job_was_created = True
-
-            provider_job_id = processing_job.provider_job_id
-            assert provider_job_id is not None
-            first_status: dict[str, object] | None = None
-
-            if provider_job_was_created:
-                await provider.start_job(provider_job_id)
-                await _wait_before_first_poll(note.id, provider_job_id)
-            else:
-                # A retry must not issue /start again. Check an existing job only after
-                # ARQ's retry delay; start it solely if Gnani still reports CREATED.
-                first_status = await provider.poll_status(provider_job_id)
-                if first_status.get("status") == "CREATED":
-                    await provider.start_job(provider_job_id)
-                    first_status = None
-                    await _wait_before_first_poll(note.id, provider_job_id)
-
-            await _wait_for_gnani_completion(provider, provider_job_id, first_status)
-            transcript_json = await _download_transcript(provider, provider_job_id)
-            await _store_transcript(db, note, processing_job, transcript_json)
-
-            logger.info(
-                "transcription_completed", note_id=str(note.id), provider_job_id=provider_job_id
-            )
-            from app.workers.main import get_redis_pool
-
-            redis = await get_redis_pool()
-            await redis.enqueue_job("generate_summary", note.id)
+                
+                await provider.start_job(processing_job.provider_job_id)
+                note.status = AudioStatus.TRANSCRIPTION_PROCESSING.value
+                await db.commit()
+                logger.info(
+                    "transcription_started", note_id=str(note.id), provider_job_id=processing_job.provider_job_id
+                )
+            # Worker finishes successfully here. Webhook handles the rest.
         except ProviderError as error:
             await db.rollback()
             await _handle_job_failure(
@@ -147,40 +129,40 @@ def _find_processing_job(note: AudioNote, job_type: JobType) -> ProcessingJob | 
     return next((job for job in note.processing_jobs if job.job_type == job_type.value), None)
 
 
-async def _wait_before_first_poll(note_id: uuid.UUID, provider_job_id: str) -> None:
-    """Respect Gnani's documented polling interval after /start."""
-    logger.info(
-        "gnani_first_poll_deferred",
-        note_id=str(note_id),
-        provider_job_id=provider_job_id,
-        delay_seconds=settings.gnani_poll_interval_seconds,
-    )
-    await asyncio.sleep(settings.gnani_poll_interval_seconds)
+async def process_completed_transcription(ctx: dict, note_id: uuid.UUID, provider_job_id: str) -> None:
+    """Invoked by the webhook to finalize a completed transcription."""
+    attempt = int(ctx.get("job_try", 1))
+    logger.info("process_completed_transcription_started", note_id=str(note_id), attempt=attempt)
 
-
-async def _wait_for_gnani_completion(
-    provider: GnaniTranscriptionProvider,
-    provider_job_id: str,
-    first_status: dict[str, object] | None,
-) -> None:
-    """Poll at the configured interval until Gnani reaches a terminal state."""
-    pending_status = first_status
-    for _ in range(settings.gnani_max_poll_attempts):
-        status_data = pending_status or await provider.poll_status(provider_job_id)
-        pending_status = None
-        job_status = str(status_data.get("status", ""))
-        logger.info("gnani_job_polled", provider_job_id=provider_job_id, provider_status=job_status)
-        if job_status in {"COMPLETED", "PARTIAL_FAILURE"}:
+    async with async_session_factory() as db:
+        note = await _load_note_for_transcription(db, note_id)
+        if note is None:
             return
-        if job_status in _TERMINAL_GNANI_STATUSES:
-            raise ProviderError(
-                f"Gnani job ended with {job_status}",
-                retryable=False,
-                error_code=job_status.lower(),
-                response_data=status_data,
+
+        if note.status == AudioStatus.TRANSCRIPTION_COMPLETED.value:
+            return
+
+        processing_job = _find_processing_job(note, JobType.TRANSCRIPTION)
+        if not processing_job:
+            return
+            
+        try:
+            provider = GnaniTranscriptionProvider()
+            transcript_json = await _download_transcript(provider, provider_job_id)
+            await _store_transcript(db, note, processing_job, transcript_json)
+            logger.info(
+                "transcription_completed", note_id=str(note.id), provider_job_id=provider_job_id
             )
-        await asyncio.sleep(settings.gnani_poll_interval_seconds)
-    raise ProviderError("Gnani polling timed out", retryable=True, error_code="poll_timeout")
+        except ProviderError as error:
+            await db.rollback()
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "transcription", error, error.retryable
+            )
+        except Exception as error:
+            await db.rollback()
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "transcription", error, retryable=True
+            )
 
 
 async def _download_transcript(
@@ -219,6 +201,8 @@ async def _store_transcript(
     if not isinstance(raw_segments, list):
         raise ProviderError("Gnani returned malformed transcript segments", retryable=True)
 
+    note.resolved_language = str(transcript_json.get("language_code", ""))
+
     segments: list[TranscriptSegment] = []
     for sequence_number, raw_segment in enumerate(raw_segments):
         if not isinstance(raw_segment, Mapping):
@@ -226,6 +210,19 @@ async def _store_transcript(
         text = str(raw_segment.get("text", "")).strip()
         if not text:
             continue
+            
+        confidence = raw_segment.get("confidence")
+        if confidence is not None:
+            confidence = float(confidence)
+            
+        speaker_id = raw_segment.get("speaker_id")
+        if speaker_id is not None:
+            speaker_id = int(speaker_id)
+            
+        language_detected = raw_segment.get("language_detected")
+        if language_detected is not None:
+            language_detected = str(language_detected)
+
         segments.append(
             TranscriptSegment(
                 note_id=note.id,
@@ -233,6 +230,9 @@ async def _store_transcript(
                 start_ms=_seconds_to_milliseconds(raw_segment.get("start_time")),
                 end_ms=_seconds_to_milliseconds(raw_segment.get("end_time")),
                 text=text,
+                speaker_id=speaker_id,
+                confidence=confidence,
+                language_detected=language_detected,
             )
         )
     db.add_all(segments)
@@ -241,7 +241,7 @@ async def _store_transcript(
     if isinstance(duration_seconds, (int, float)):
         note.duration_seconds = float(duration_seconds)
     processing_job.status = JobStatus.COMPLETED.value
-    note.status = AudioStatus.SUMMARIZING.value
+    note.status = AudioStatus.TRANSCRIPTION_COMPLETED.value
     await db.commit()
 
 
@@ -267,7 +267,7 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
         if note is None:
             logger.warning("audio_note_not_found", note_id=str(note_id))
             return
-        if note.summary:
+        if note.summary_status == "completed":
             logger.info("summary_already_finished", note_id=str(note.id))
             return
 
@@ -286,7 +286,8 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
         else:
             processing_job.status = JobStatus.RUNNING.value
             processing_job.attempt_count = attempt
-        note.status = AudioStatus.SUMMARIZING.value
+            
+        note.summary_status = "processing"
         await db.commit()
 
         try:
@@ -298,7 +299,10 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
             )
             note.summary = await GeminiSummaryProvider().summarize(transcript)
             processing_job.status = JobStatus.COMPLETED.value
-            note.status = AudioStatus.COMPLETED.value
+            note.summary_status = "completed"
+            from datetime import datetime
+            from datetime import timezone
+            note.summary_completed_at = datetime.now(timezone.utc)
             await db.commit()
             logger.info("summary_completed", note_id=str(note.id))
         except SummaryProviderError as error:
@@ -341,9 +345,10 @@ async def _handle_job_failure(
 
     if should_retry:
         processing_job.status = JobStatus.PENDING.value
-        note.status = (
-            AudioStatus.SUMMARIZING.value if stage == "summary" else AudioStatus.QUEUED.value
-        )
+        if stage == "summary":
+            note.summary_status = "queued"
+        else:
+            note.status = AudioStatus.TRANSCRIPTION_CREATED.value
         await db.commit()
         delay_seconds = RETRY_DELAYS[attempt - 1]
         logger.info("job_retrying", note_id=str(note.id), stage=stage, delay_seconds=delay_seconds)
@@ -351,12 +356,11 @@ async def _handle_job_failure(
 
     processing_job.status = JobStatus.FAILED.value
     if stage == "summary":
-        # The transcript remains readable; only the optional derived summary failed.
-        note.status = AudioStatus.COMPLETED.value
+        note.summary_status = "failed"
         note.failure_stage = "summary"
         note.failure_message = "Summary generation failed. You can still view the transcript."
     else:
-        note.status = AudioStatus.FAILED.value
+        note.status = AudioStatus.TRANSCRIPTION_FAILED.value
         note.failure_stage = "transcription"
         note.failure_message = "Transcription could not be completed. Please try again."
     await db.commit()

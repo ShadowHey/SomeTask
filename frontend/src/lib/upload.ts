@@ -21,6 +21,7 @@ const ALLOWED_MIME_TYPES = [
 
 export async function uploadAudioFile(
   file: File,
+  config: any,
   onProgress?: (progress: UploadProgress) => void
 ): Promise<void> {
   // Validate file
@@ -88,7 +89,7 @@ export async function uploadAudioFile(
     }
 
     // 5. Tell FastAPI to start the background job
-    await api.recordings.process(noteId);
+    await api.recordings.process(noteId, config);
 
     onProgress?.({ status: "success", progress: 100, message: "Upload complete!" });
   } catch (error) {

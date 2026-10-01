@@ -29,7 +29,7 @@ class ProviderError(Exception):
 class TranscriptionProvider(Protocol):
     """Application boundary for an asynchronous transcription provider."""
 
-    async def create_job(self, audio_url: str, language_code: str) -> str: ...
+    async def create_job(self, audio_url: str, config: dict, callback_url: str | None = None) -> str: ...
 
     async def start_job(self, job_id: str) -> None: ...
 
@@ -62,26 +62,23 @@ class GnaniTranscriptionProvider:
     def _client(self, *, timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=self.transport, timeout=timeout or self.timeout)
 
-    async def create_job(self, audio_url: str, language_code: str) -> str:
+    async def create_job(self, audio_url: str, config: dict, callback_url: str | None = None) -> str:
         """Create a batch job with an R2/S3-compatible presigned source URL."""
+        payload = {
+            "config": config,
+            "source": {
+                "type": "cloud_storage",
+                "auth": {"mode": "public"},
+                "paths": [audio_url],
+            },
+        }
+        if callback_url:
+            payload["callback_url"] = callback_url
+
         data = await self._request_json(
             "POST",
             "/stt/v3/batch/jobs",
-            json={
-                "config": {
-                    "model": self.model,
-                    "language_code": language_code,
-                    "mode": "transcribe",
-                    "with_diarization": False,
-                    "is_multi_channel": False,
-                    "with_denoise": False,
-                },
-                "source": {
-                    "type": "cloud_storage",
-                    "auth": {"mode": "public"},
-                    "paths": [audio_url],
-                },
-            },
+            json=payload,
         )
         job_id = data.get("job_id")
         if not isinstance(job_id, str) or not job_id:

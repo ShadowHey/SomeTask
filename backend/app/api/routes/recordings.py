@@ -50,7 +50,8 @@ async def start_processing(
             status_code=status.HTTP_409_CONFLICT, detail="Recording is already processing"
         )
 
-    note.status = AudioStatus.QUEUED.value
+    note.status = AudioStatus.TRANSCRIPTION_CREATED.value
+    note.transcription_config = request.config.model_dump()
     await db.commit()
     try:
         redis = await get_redis_pool()
@@ -92,6 +93,7 @@ async def list_recordings(
             id=note.id,
             original_filename=note.original_filename,
             status=note.status,
+            summary_status=note.summary_status,
             size_bytes=note.size_bytes,
             duration_seconds=note.duration_seconds,
             summary_preview=(note.summary[:150] + "…")
@@ -138,6 +140,39 @@ async def get_recording(
     db: AsyncSession = Depends(get_db),
 ) -> AudioNote:
     return await _get_owned_note(db, note_id, user_id, include_segments=True)
+
+@router.post("/{note_id}/summary", response_model=RecordingDetail)
+async def generate_summary(
+    note_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> AudioNote:
+    note = await _get_owned_note(db, note_id, user_id)
+    if note.status != AudioStatus.TRANSCRIPTION_COMPLETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Transcription must be completed first"
+        )
+    if note.summary_status in {"queued", "processing", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Summary is already requested or completed"
+        )
+    note.summary_status = "queued"
+    await db.commit()
+    try:
+        redis = await get_redis_pool()
+        await redis.enqueue_job("generate_summary", note.id)
+    except Exception as error:
+        note.summary_status = "failed"
+        await db.commit()
+        logger.error(
+            "summary_enqueue_failed", note_id=str(note.id), error_type=type(error).__name__
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Summary generation could not be queued. Please try again.",
+        ) from error
+    logger.info("summary_queued", recording_id=str(note.id), user_id=str(user_id))
+    return await _get_owned_note(db, note.id, user_id, include_segments=True)
 
 
 @router.get("/{note_id}/status", response_model=RecordingStatusResponse)
