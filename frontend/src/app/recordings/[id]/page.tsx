@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, use } from "react";
+import { useCallback, useEffect, useState, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
@@ -14,7 +14,7 @@ export default function RecordingDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const { user } = useAuth();
+  const { isLoading: isAuthLoading } = useAuth();
   
   const [recording, setRecording] = useState<RecordingDetail | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -27,23 +27,20 @@ export default function RecordingDetailPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<TranscriptSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const recordingStatus = recording?.status;
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  useEffect(() => {
-    fetchRecording();
-  }, [id]);
-
-  const fetchRecording = async () => {
+  const fetchRecording = useCallback(async () => {
     try {
       const data = await api.recordings.get(id);
       setRecording(data);
-      setEditName(data.display_name);
+      setEditName(data.original_filename);
       
       if (data.status !== "created" && data.status !== "uploading") {
         try {
-          const urlData = await api.recordings.getAudioUrl(id);
-          setAudioUrl(urlData.url);
+          const response = await api.recordings.getAudioUrl(id);
+          setAudioUrl(response.url);
         } catch (e) {
           console.error("Failed to load audio URL", e);
         }
@@ -54,10 +51,22 @@ export default function RecordingDetailPage({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+    const timer = window.setTimeout(() => void fetchRecording(), 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchRecording, isAuthLoading]);
+
+  useEffect(() => {
+    if (!recordingStatus || ["completed", "failed"].includes(recordingStatus)) return;
+    const interval = window.setInterval(() => void fetchRecording(), 5_000);
+    return () => window.clearInterval(interval);
+  }, [fetchRecording, recordingStatus]);
 
   const handleRename = async () => {
-    if (!editName.trim() || editName === recording?.display_name) {
+    if (!editName.trim() || editName === recording?.original_filename) {
       setIsEditingName(false);
       return;
     }
@@ -156,7 +165,7 @@ export default function RecordingDetailPage({
                 </div>
               ) : (
                 <div className="flex items-center space-x-2">
-                  <h1 className="text-lg font-semibold text-gray-900">{recording.display_name}</h1>
+                  <h1 className="text-lg font-semibold text-gray-900">{recording.original_filename}</h1>
                   <button onClick={() => setIsEditingName(true)} className="text-gray-400 hover:text-blue-600">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -251,9 +260,9 @@ export default function RecordingDetailPage({
                 <h2 className="text-lg font-semibold text-gray-900">AI Summary</h2>
               </div>
               
-              {recording.summary?.content ? (
+              {recording.summary ? (
                 <div className="prose prose-sm prose-blue text-gray-700 whitespace-pre-wrap">
-                  {recording.summary.content}
+                  {recording.summary}
                 </div>
               ) : (
                 <p className="text-sm text-gray-500 italic">

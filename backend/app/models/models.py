@@ -1,15 +1,18 @@
-"""SQLAlchemy models for all database tables."""
+"""SQLAlchemy models for all database tables matching Supabase schema."""
+
+from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
+    Enum,
     Float,
     ForeignKey,
-    Index,
     Integer,
-    String,
     Text,
     func,
 )
@@ -17,119 +20,45 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import AudioStatus, JobStatus, JobType, SummaryStatus
+
+# Note: We do not define the 'users' table here because Supabase manages auth.users.
+# We will just use UUIDs to reference them in our tables.
 
 
-class User(Base):
-    __tablename__ = "users"
+class AudioNote(Base):
+    __tablename__ = "audio_notes"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # References auth.users(id) - assuming it's a UUID in Supabase
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
-    # Relationships
-    audio_files: Mapped[list["AudioFile"]] = relationship(back_populates="user", lazy="selectin")
+    original_filename: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
 
-
-class AudioFile(Base):
-    __tablename__ = "audio_files"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    object_key: Mapped[str] = mapped_column(String(1000), nullable=False, unique=True)
-    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=True)  # Set after upload complete
-    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=AudioStatus.CREATED.value, index=True
-    )
-    language_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
-
-    # Multipart upload tracking
-    upload_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-    # Failure tracking
-    failure_stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Relationships
-    user: Mapped["User"] = relationship(back_populates="audio_files")
-    processing_jobs: Mapped[list["ProcessingJob"]] = relationship(
-        back_populates="audio_file", lazy="selectin"
-    )
-    transcript_segments: Mapped[list["TranscriptSegment"]] = relationship(
-        back_populates="audio_file", lazy="selectin", order_by="TranscriptSegment.sequence"
-    )
-    summary: Mapped["Summary | None"] = relationship(
-        back_populates="audio_file", uselist=False, lazy="selectin"
-    )
-
-    __table_args__ = (
-        Index("ix_audio_files_user_created", "user_id", "created_at"),
-    )
-
-
-class ProcessingJob(Base):
-    __tablename__ = "processing_jobs"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    audio_file_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("audio_files.id", ondelete="CASCADE"),
+        Enum(
+            "created",
+            "uploading",
+            "uploaded",
+            "queued",
+            "transcribing",
+            "summarizing",
+            "completed",
+            "failed",
+            name="audio_status",
+        ),
         nullable=False,
-        index=True,
+        server_default="created",
     )
-    job_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=JobStatus.PENDING.value
-    )
-    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
 
-    # Provider tracking
-    provider_job_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    raw_provider_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
-    # Chunk tracking (for long audio)
-    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    chunk_offset_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failure_stage: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Error tracking
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    retryable: Mapped[bool | None] = mapped_column(default=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Timestamps
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -138,25 +67,29 @@ class ProcessingJob(Base):
     )
 
     # Relationships
-    audio_file: Mapped["AudioFile"] = relationship(back_populates="processing_jobs")
+    transcript_segments: Mapped[list[TranscriptSegment]] = relationship(
+        back_populates="note",
+        cascade="all, delete-orphan",
+        order_by="TranscriptSegment.sequence_number",
+    )
+    processing_jobs: Mapped[list[ProcessingJob]] = relationship(
+        back_populates="note", cascade="all, delete-orphan"
+    )
 
 
 class TranscriptSegment(Base):
     __tablename__ = "transcript_segments"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    audio_file_id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("audio_files.id", ondelete="CASCADE"),
+        ForeignKey("audio_notes.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    start_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    end_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -164,34 +97,28 @@ class TranscriptSegment(Base):
     )
 
     # Relationships
-    audio_file: Mapped["AudioFile"] = relationship(back_populates="transcript_segments")
+    note: Mapped[AudioNote] = relationship(back_populates="transcript_segments")
 
-    __table_args__ = (
-        Index("ix_transcript_segments_audio_seq", "audio_file_id", "sequence"),
-        # pg_trgm index is created in migration (requires extension)
-    )
+    # We omit the GIN index definition here because Alembic might struggle with pg_trgm out-of-the-box.
+    # We will let the manual Supabase SQL script handle the index.
 
 
-class Summary(Base):
-    __tablename__ = "summaries"
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    audio_file_id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("audio_files.id", ondelete="CASCADE"),
+        ForeignKey("audio_notes.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
     )
-    content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="gemini")
-    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=SummaryStatus.PENDING.value
-    )
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    raw_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    provider_job_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_provider_response: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -201,27 +128,4 @@ class Summary(Base):
     )
 
     # Relationships
-    audio_file: Mapped["AudioFile"] = relationship(back_populates="summary")
-
-
-# Raw Gnani response storage — stored as JSONB on ProcessingJob.raw_provider_response
-# plus full transcript stored here for complete audit trail
-class RawTranscript(Base):
-    __tablename__ = "raw_transcripts"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    audio_file_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("audio_files.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="gnani")
-    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    raw_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    note: Mapped[AudioNote] = relationship(back_populates="processing_jobs")

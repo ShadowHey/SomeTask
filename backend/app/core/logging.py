@@ -44,6 +44,10 @@ def setup_logging(debug: bool = False) -> None:
     # Quiet noisy third-party loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # httpx/httpcore debug logs can include full presigned URLs. Those URLs grant
+    # temporary access to private audio, so never emit them even in local debug mode.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

@@ -1,411 +1,365 @@
-"""ARQ worker tasks for background processing."""
+"""Idempotent ARQ tasks for the transcription and summarization pipeline."""
+
+from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Mapping
 
-from sqlalchemy import select
+from arq import Retry
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.supabase import supabase_client
 from app.db.session import async_session_factory
-from app.models.enums import AudioStatus, JobStatus, JobType, SummaryStatus
-from app.models.models import AudioFile, ProcessingJob, RawTranscript, Summary, TranscriptSegment
-from app.services.storage.r2 import storage_service
+from app.models.enums import AudioStatus, JobStatus, JobType
+from app.models.models import AudioNote, ProcessingJob, TranscriptSegment
 from app.services.summarization.gemini import GeminiSummaryProvider, SummaryProviderError
 from app.services.transcription.gnani import GnaniTranscriptionProvider, ProviderError
 
 logger = get_logger(__name__)
 
-# Retry delays based on policy: 1 min, 5 min, 10 min
 RETRY_DELAYS = [60, 300, 600]
+_TERMINAL_GNANI_STATUSES = {"FAILED", "START_FAILED", "CANCELLED"}
 
-# --- Enqueue helpers (used by API) ---
 
-async def enqueue_transcription(audio_file_id: str) -> None:
-    """Helper to enqueue a transcription job from the API."""
+async def process_audio_note(ctx: dict, note_id: uuid.UUID) -> None:
+    """Route a newly uploaded note into the idempotent transcription task."""
     from app.workers.main import get_redis_pool
-    
+
     redis = await get_redis_pool()
-    await redis.enqueue_job("process_transcription", audio_file_id)
+    await redis.enqueue_job("process_transcription", note_id)
 
 
-async def enqueue_summary(audio_file_id: str) -> None:
-    """Helper to enqueue a summary job from the API."""
-    from app.workers.main import get_redis_pool
-    
-    redis = await get_redis_pool()
-    await redis.enqueue_job("generate_summary", audio_file_id)
+def _signed_url_for_note(note: AudioNote) -> str:
+    """Create a short-lived, worker-only URL that Gnani can fetch once."""
+    response = supabase_client.storage.from_(settings.supabase_bucket_name).create_signed_url(
+        note.storage_path,
+        expires_in=settings.gnani_url_expiry,
+    )
+    signed_url = response.get("signedURL") or response.get("signedUrl")
+    if not signed_url:
+        raise ProviderError("Unable to create a storage URL for transcription", retryable=True)
+    return signed_url
 
 
-# --- Worker Tasks ---
+async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
+    """Create, start, poll, and persist a Gnani Batch transcription."""
+    attempt = int(ctx.get("job_try", 1))
+    logger.info("process_transcription_started", note_id=str(note_id), attempt=attempt)
 
-async def process_transcription(ctx: dict, audio_file_id: str) -> None:
-    """
-    ARQ Task: Handle the full transcription pipeline.
-    Creates job -> starts job -> polls -> downloads -> saves to DB.
-    """
-    job_id = ctx.get("job_id")
-    attempt = ctx.get("job_try", 1)
-    
-    logger.info("process_transcription_started", audio_file_id=audio_file_id, attempt=attempt)
-    
     async with async_session_factory() as db:
-        # Load audio file and processing job
-        stmt = (
-            select(AudioFile)
-            .where(AudioFile.id == audio_file_id)
-            .options(selectinload(AudioFile.processing_jobs))
-        )
-        audio_file = (await db.execute(stmt)).scalar_one_or_none()
-        
-        if not audio_file:
-            logger.error("audio_file_not_found", audio_file_id=audio_file_id)
+        note = await _load_note_for_transcription(db, note_id)
+        if note is None:
             return
 
-        if audio_file.status in (AudioStatus.DELETED.value, AudioStatus.FAILED.value) and attempt == 1:
-            # If attempting to start a deleted or permanently failed job (unless it's an ARQ retry)
-            # We don't process. If a user retries, the API should reset the status to QUEUED first.
-            if audio_file.status != AudioStatus.QUEUED.value:
-                logger.warning("skipping_transcription_wrong_status", audio_file_id=audio_file_id, status=audio_file.status)
-                return
+        processing_job = _find_processing_job(note, JobType.TRANSCRIPTION)
+        if processing_job and processing_job.status == JobStatus.RUNNING.value:
+            logger.info("transcription_duplicate_skipped", note_id=str(note.id), attempt=attempt)
+            return
+        if note.status in {AudioStatus.COMPLETED.value, AudioStatus.SUMMARIZING.value}:
+            logger.info("transcription_already_finished", note_id=str(note.id), status=note.status)
+            return
 
-        # Find or create transcription ProcessingJob record
-        processing_job = next(
-            (j for j in audio_file.processing_jobs if j.job_type == JobType.TRANSCRIPTION.value), 
-            None
-        )
-        
-        if not processing_job:
+        if processing_job is None:
             processing_job = ProcessingJob(
-                audio_file_id=audio_file.id,
+                note_id=note.id,
                 job_type=JobType.TRANSCRIPTION.value,
                 status=JobStatus.RUNNING.value,
-                attempt_count=attempt
+                attempt_count=attempt,
             )
             db.add(processing_job)
         else:
             processing_job.status = JobStatus.RUNNING.value
             processing_job.attempt_count = attempt
-            
-        processing_job.started_at = datetime.now(UTC)
-        audio_file.status = AudioStatus.TRANSCRIBING.value
+        note.status = AudioStatus.TRANSCRIBING.value
         await db.commit()
 
         try:
-            # Check if duration requires chunking
-            # In a real app we'd use FFmpeg to get duration if not provided
-            # For take-home, if it's over 4 hours, we fail it for now unless we explicitly implemented Phase 9
-            # (We will add the chunking logic independently later if required)
-            if audio_file.duration_seconds and audio_file.duration_seconds > settings.gnani_max_duration_hours * 3600:
-                # Stub for >4h chunking
-                raise Exception("Files >4 hours require FFmpeg chunking (Phase 9)")
-
             provider = GnaniTranscriptionProvider()
-
-            # 1. Generate short-lived presigned URL for Gnani
-            presigned_url = storage_service.generate_presigned_download_url(
-                audio_file.object_key, expires_in=settings.gnani_url_expiry
-            )
-
-            # 2. Create Job (Idempotency: check if we already have a provider_job_id)
+            provider_job_was_created = False
             if not processing_job.provider_job_id:
-                logger.debug("creating_gnani_job", audio_file_id=audio_file_id)
-                provider_job_id = await provider.create_job(presigned_url, audio_file.language_code)
-                processing_job.provider_job_id = provider_job_id
-                await db.commit()
-            
-            provider_job_id = processing_job.provider_job_id
-
-            # 3. Start Job
-            # Gnani /start endpoint can return an error if already started, but we'll try it
-            # and catch if it's already in progress.
-            try:
-                logger.debug("starting_gnani_job", audio_file_id=audio_file_id, provider_job_id=provider_job_id)
-                await provider.start_job(provider_job_id)
-            except ProviderError as e:
-                # If it's already started, this might fail with a 4xx, which we can potentially ignore if status is running
-                if "already started" not in str(e).lower() and not (e.response_data and e.response_data.get("status") in ["IN_PROGRESS", "COMPLETED"]):
-                    raise
-
-            # 4. Poll Status
-            logger.debug("polling_gnani_job", audio_file_id=audio_file_id, provider_job_id=provider_job_id)
-            max_polls = settings.gnani_max_poll_attempts
-            poll_count = 0
-            completed = False
-            
-            while poll_count < max_polls:
-                status_data = await provider.poll_status(provider_job_id)
-                job_status = status_data.get("status")
-                
-                if job_status == "COMPLETED":
-                    completed = True
-                    break
-                elif job_status in ["FAILED", "START_FAILED", "CANCELLED"]:
-                    raise ProviderError(f"Gnani job terminal failure: {job_status}", retryable=False, response_data=status_data)
-                elif job_status == "PARTIAL_FAILURE":
-                    # For a single file, partial failure usually means failure
-                    completed = True
-                    break
-                    
-                poll_count += 1
-                await asyncio.sleep(settings.gnani_poll_interval_seconds)
-                
-                # Keep DB connection alive / update heartbeat if necessary
-                # (SQLAlchemy async sessions are generally fine across sleeps, but good practice to not hold locks)
-                
-            if not completed:
-                raise ProviderError("Polling timed out", retryable=True)
-
-            # 5. Get Files and Download Transcript
-            logger.debug("downloading_transcript", audio_file_id=audio_file_id)
-            files = await provider.get_files(provider_job_id)
-            
-            if not files:
-                raise ProviderError("No files returned in completed job", retryable=False)
-                
-            file_data = files[0]
-            transcript_url = file_data.get("transcript_url")
-            
-            if not transcript_url:
-                raise ProviderError("No transcript_url provided in file data", retryable=False, response_data=file_data)
-                
-            transcript_json = await provider.download_transcript(transcript_url)
-            
-            # Save raw response
-            raw_transcript = RawTranscript(
-                audio_file_id=audio_file.id,
-                raw_response=transcript_json
-            )
-            db.add(raw_transcript)
-            
-            processing_job.raw_provider_response = transcript_json
-            
-            # 6. Normalize and save segments (Idempotency: clear existing if any)
-            await db.execute(
-                TranscriptSegment.__table__.delete().where(TranscriptSegment.audio_file_id == audio_file.id)
-            )
-            
-            segments_data = transcript_json.get("segments", [])
-            # Fallback if segments are missing but full_transcript is present
-            if not segments_data and transcript_json.get("full_transcript"):
-                segments_data = [{
-                    "text": transcript_json["full_transcript"],
-                    "start_time": 0.0,
-                    "end_time": transcript_json.get("duration_seconds", 0.0)
-                }]
-                
-            segments = []
-            for i, seg in enumerate(segments_data):
-                text = seg.get("text", "").strip()
-                if not text:
-                    continue
-                    
-                start_ms = int(seg.get("start_time", 0) * 1000) if seg.get("start_time") is not None else None
-                end_ms = int(seg.get("end_time", 0) * 1000) if seg.get("end_time") is not None else None
-                
-                segments.append(
-                    TranscriptSegment(
-                        audio_file_id=audio_file.id,
-                        sequence=i,
-                        start_ms=start_ms,
-                        end_ms=end_ms,
-                        text=text
-                    )
+                presigned_url = _signed_url_for_note(note)
+                processing_job.provider_job_id = await provider.create_job(
+                    presigned_url, settings.gnani_default_language_code
                 )
-            
-            if segments:
-                db.add_all(segments)
-            
-            # Set duration if we got it from the provider
-            if transcript_json.get("duration_seconds"):
-                audio_file.duration_seconds = transcript_json.get("duration_seconds")
-                
-            # 7. Update status to SUMMARIZING and enqueue summary job
-            processing_job.status = JobStatus.COMPLETED.value
-            processing_job.completed_at = datetime.now(UTC)
-            
-            audio_file.status = AudioStatus.SUMMARIZING.value
-            await db.commit()
-            
-            logger.info("transcription_completed", audio_file_id=audio_file_id)
-            
-            # Enqueue summary
+                await db.commit()
+                provider_job_was_created = True
+
+            provider_job_id = processing_job.provider_job_id
+            assert provider_job_id is not None
+            first_status: dict[str, object] | None = None
+
+            if provider_job_was_created:
+                await provider.start_job(provider_job_id)
+                await _wait_before_first_poll(note.id, provider_job_id)
+            else:
+                # A retry must not issue /start again. Check an existing job only after
+                # ARQ's retry delay; start it solely if Gnani still reports CREATED.
+                first_status = await provider.poll_status(provider_job_id)
+                if first_status.get("status") == "CREATED":
+                    await provider.start_job(provider_job_id)
+                    first_status = None
+                    await _wait_before_first_poll(note.id, provider_job_id)
+
+            await _wait_for_gnani_completion(provider, provider_job_id, first_status)
+            transcript_json = await _download_transcript(provider, provider_job_id)
+            await _store_transcript(db, note, processing_job, transcript_json)
+
+            logger.info(
+                "transcription_completed", note_id=str(note.id), provider_job_id=provider_job_id
+            )
             from app.workers.main import get_redis_pool
+
             redis = await get_redis_pool()
-            await redis.enqueue_job("generate_summary", audio_file_id)
-
-        except ProviderError as e:
+            await redis.enqueue_job("generate_summary", note.id)
+        except ProviderError as error:
             await db.rollback()
-            await _handle_job_failure(db, audio_file.id, processing_job.id, attempt, "transcription", e, e.retryable)
-            
-        except Exception as e:
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "transcription", error, error.retryable
+            )
+        except Exception as error:
             await db.rollback()
-            await _handle_job_failure(db, audio_file.id, processing_job.id, attempt, "transcription", e, retryable=True)
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "transcription", error, retryable=True
+            )
 
 
-async def generate_summary(ctx: dict, audio_file_id: str) -> None:
-    """
-    ARQ Task: Generate a summary using Gemini Flash.
-    """
-    attempt = ctx.get("job_try", 1)
-    
-    logger.info("generate_summary_started", audio_file_id=audio_file_id, attempt=attempt)
-    
-    async with async_session_factory() as db:
-        stmt = (
-            select(AudioFile)
-            .where(AudioFile.id == audio_file_id)
-            .options(
-                selectinload(AudioFile.transcript_segments),
-                selectinload(AudioFile.summary),
-                selectinload(AudioFile.processing_jobs)
+async def _load_note_for_transcription(db: AsyncSession, note_id: uuid.UUID) -> AudioNote | None:
+    """Lock the note while deciding whether a duplicate worker may start it."""
+    result = await db.execute(
+        select(AudioNote)
+        .where(AudioNote.id == note_id)
+        .options(selectinload(AudioNote.processing_jobs))
+        .with_for_update()
+    )
+    note = result.scalar_one_or_none()
+    if note is None:
+        logger.warning("audio_note_not_found", note_id=str(note_id))
+        return None
+    return note
+
+
+def _find_processing_job(note: AudioNote, job_type: JobType) -> ProcessingJob | None:
+    return next((job for job in note.processing_jobs if job.job_type == job_type.value), None)
+
+
+async def _wait_before_first_poll(note_id: uuid.UUID, provider_job_id: str) -> None:
+    """Respect Gnani's documented polling interval after /start."""
+    logger.info(
+        "gnani_first_poll_deferred",
+        note_id=str(note_id),
+        provider_job_id=provider_job_id,
+        delay_seconds=settings.gnani_poll_interval_seconds,
+    )
+    await asyncio.sleep(settings.gnani_poll_interval_seconds)
+
+
+async def _wait_for_gnani_completion(
+    provider: GnaniTranscriptionProvider,
+    provider_job_id: str,
+    first_status: dict[str, object] | None,
+) -> None:
+    """Poll at the configured interval until Gnani reaches a terminal state."""
+    pending_status = first_status
+    for _ in range(settings.gnani_max_poll_attempts):
+        status_data = pending_status or await provider.poll_status(provider_job_id)
+        pending_status = None
+        job_status = str(status_data.get("status", ""))
+        logger.info("gnani_job_polled", provider_job_id=provider_job_id, provider_status=job_status)
+        if job_status in {"COMPLETED", "PARTIAL_FAILURE"}:
+            return
+        if job_status in _TERMINAL_GNANI_STATUSES:
+            raise ProviderError(
+                f"Gnani job ended with {job_status}",
+                retryable=False,
+                error_code=job_status.lower(),
+                response_data=status_data,
+            )
+        await asyncio.sleep(settings.gnani_poll_interval_seconds)
+    raise ProviderError("Gnani polling timed out", retryable=True, error_code="poll_timeout")
+
+
+async def _download_transcript(
+    provider: GnaniTranscriptionProvider, provider_job_id: str
+) -> dict[str, object]:
+    files = await provider.get_files(provider_job_id)
+    if not files:
+        raise ProviderError("Gnani returned no result files", retryable=True, error_code="no_files")
+    transcript_url = files[0].get("transcript_url")
+    if not isinstance(transcript_url, str) or not transcript_url:
+        raise ProviderError(
+            "Gnani returned no transcript URL", retryable=True, error_code="no_transcript_url"
+        )
+    return await provider.download_transcript(transcript_url)
+
+
+async def _store_transcript(
+    db: AsyncSession,
+    note: AudioNote,
+    processing_job: ProcessingJob,
+    transcript_json: dict[str, object],
+) -> None:
+    """Replace normalized segments atomically and preserve Gnani's raw response."""
+    processing_job.raw_provider_response = transcript_json
+    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.note_id == note.id))
+
+    raw_segments = transcript_json.get("segments", [])
+    if not raw_segments and transcript_json.get("full_transcript"):
+        raw_segments = [
+            {
+                "text": transcript_json["full_transcript"],
+                "start_time": 0,
+                "end_time": transcript_json.get("duration_seconds", 0),
+            }
+        ]
+    if not isinstance(raw_segments, list):
+        raise ProviderError("Gnani returned malformed transcript segments", retryable=True)
+
+    segments: list[TranscriptSegment] = []
+    for sequence_number, raw_segment in enumerate(raw_segments):
+        if not isinstance(raw_segment, Mapping):
+            continue
+        text = str(raw_segment.get("text", "")).strip()
+        if not text:
+            continue
+        segments.append(
+            TranscriptSegment(
+                note_id=note.id,
+                sequence_number=sequence_number,
+                start_ms=_seconds_to_milliseconds(raw_segment.get("start_time")),
+                end_ms=_seconds_to_milliseconds(raw_segment.get("end_time")),
+                text=text,
             )
         )
-        audio_file = (await db.execute(stmt)).scalar_one_or_none()
-        
-        if not audio_file:
-            logger.error("audio_file_not_found", audio_file_id=audio_file_id)
+    db.add_all(segments)
+
+    duration_seconds = transcript_json.get("duration_seconds")
+    if isinstance(duration_seconds, (int, float)):
+        note.duration_seconds = float(duration_seconds)
+    processing_job.status = JobStatus.COMPLETED.value
+    note.status = AudioStatus.SUMMARIZING.value
+    await db.commit()
+
+
+def _seconds_to_milliseconds(value: object) -> int | None:
+    if isinstance(value, (int, float)):
+        return int(value * 1000)
+    return None
+
+
+async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
+    """Generate and persist a Gemini summary without discarding a transcript on failure."""
+    attempt = int(ctx.get("job_try", 1))
+    logger.info("generate_summary_started", note_id=str(note_id), attempt=attempt)
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(AudioNote)
+            .where(AudioNote.id == note_id)
+            .options(
+                selectinload(AudioNote.transcript_segments), selectinload(AudioNote.processing_jobs)
+            )
+        )
+        note = result.scalar_one_or_none()
+        if note is None:
+            logger.warning("audio_note_not_found", note_id=str(note_id))
+            return
+        if note.summary:
+            logger.info("summary_already_finished", note_id=str(note.id))
             return
 
-        # Find or create summary ProcessingJob
-        processing_job = next(
-            (j for j in audio_file.processing_jobs if j.job_type == JobType.SUMMARY.value), 
-            None
-        )
-        
-        if not processing_job:
+        processing_job = _find_processing_job(note, JobType.SUMMARY)
+        if processing_job is None:
             processing_job = ProcessingJob(
-                audio_file_id=audio_file.id,
+                note_id=note.id,
                 job_type=JobType.SUMMARY.value,
                 status=JobStatus.RUNNING.value,
-                attempt_count=attempt
+                attempt_count=attempt,
             )
             db.add(processing_job)
+        elif processing_job.status == JobStatus.RUNNING.value:
+            logger.info("summary_duplicate_skipped", note_id=str(note.id), attempt=attempt)
+            return
         else:
             processing_job.status = JobStatus.RUNNING.value
             processing_job.attempt_count = attempt
-            
-        processing_job.started_at = datetime.now(UTC)
-        audio_file.status = AudioStatus.SUMMARIZING.value
-        
-        # Idempotency: Create or update Summary record
-        summary = audio_file.summary
-        if not summary:
-            summary = Summary(
-                audio_file_id=audio_file.id,
-                status=SummaryStatus.PENDING.value,
-                provider="gemini",
-                model=settings.gemini_model,
-                attempt_count=attempt
-            )
-            db.add(summary)
-        else:
-            summary.status = SummaryStatus.PENDING.value
-            summary.attempt_count = attempt
-            
+        note.status = AudioStatus.SUMMARIZING.value
         await db.commit()
 
         try:
-            # Build full transcript text
-            segments = sorted(audio_file.transcript_segments, key=lambda x: x.sequence)
-            full_text = " ".join(s.text for s in segments)
-            
-            provider = GeminiSummaryProvider()
-            summary_content = await provider.summarize(full_text)
-            
-            summary.content = summary_content
-            summary.status = SummaryStatus.COMPLETED.value
-            summary.updated_at = datetime.now(UTC)
-            
+            transcript = " ".join(
+                segment.text
+                for segment in sorted(
+                    note.transcript_segments, key=lambda item: item.sequence_number
+                )
+            )
+            note.summary = await GeminiSummaryProvider().summarize(transcript)
             processing_job.status = JobStatus.COMPLETED.value
-            processing_job.completed_at = datetime.now(UTC)
-            
-            audio_file.status = AudioStatus.COMPLETED.value
-            audio_file.completed_at = datetime.now(UTC)
-            
+            note.status = AudioStatus.COMPLETED.value
             await db.commit()
-            
-            logger.info("summary_completed", audio_file_id=audio_file_id)
-            
-        except SummaryProviderError as e:
+            logger.info("summary_completed", note_id=str(note.id))
+        except SummaryProviderError as error:
             await db.rollback()
-            await _handle_job_failure(db, audio_file.id, processing_job.id, attempt, "summary", e, e.retryable)
-            
-        except Exception as e:
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "summary", error, error.retryable
+            )
+        except Exception as error:
             await db.rollback()
-            await _handle_job_failure(db, audio_file.id, processing_job.id, attempt, "summary", e, retryable=True)
+            await _handle_job_failure(
+                db, note.id, processing_job.id, attempt, "summary", error, retryable=True
+            )
 
 
 async def _handle_job_failure(
-    db: AsyncSession, 
-    audio_file_id: uuid.UUID, 
-    job_id: uuid.UUID, 
-    attempt: int, 
-    stage: str, 
-    error: Exception, 
-    retryable: bool
+    db: AsyncSession,
+    note_id: uuid.UUID,
+    job_id: uuid.UUID,
+    attempt: int,
+    stage: str,
+    error: Exception,
+    retryable: bool,
 ) -> None:
-    """Handle job failures, apply retry policy, and update database."""
-    from arq import Retry
-    
-    # Reload entities
-    stmt = (
-        select(AudioFile)
-        .where(AudioFile.id == audio_file_id)
-        .options(selectinload(AudioFile.processing_jobs))
-    )
-    audio_file = (await db.execute(stmt)).scalar_one()
-    processing_job = next(j for j in audio_file.processing_jobs if j.id == job_id)
-    
-    error_msg = str(error)
-    logger.error("job_failed", audio_file_id=str(audio_file.id), stage=stage, attempt=attempt, error=error_msg, retryable=retryable)
-    
-    processing_job.last_error = error_msg
-    if hasattr(error, "error_code"):
-        processing_job.error_code = error.error_code
-        
-    # Check if we should retry
+    """Persist retry state and use the required 1m → 5m → 10m retry schedule."""
+    processing_job = (
+        await db.execute(select(ProcessingJob).where(ProcessingJob.id == job_id))
+    ).scalar_one()
+    note = (await db.execute(select(AudioNote).where(AudioNote.id == note_id))).scalar_one()
+    error_message = str(error)
+    processing_job.last_error = error_message[:2000]
     should_retry = retryable and attempt <= len(RETRY_DELAYS)
-    
+    logger.warning(
+        "job_failed",
+        note_id=str(note.id),
+        stage=stage,
+        attempt=attempt,
+        retryable=should_retry,
+        error_type=type(error).__name__,
+    )
+
     if should_retry:
-        delay_seconds = RETRY_DELAYS[attempt - 1]
-        
         processing_job.status = JobStatus.PENDING.value
-        if stage == "summary":
-            # If summary fails, transcript is still there, stay in SUMMARIZING state
-            audio_file.status = AudioStatus.SUMMARIZING.value
-        else:
-            audio_file.status = AudioStatus.QUEUED.value
-            
+        note.status = (
+            AudioStatus.SUMMARIZING.value if stage == "summary" else AudioStatus.QUEUED.value
+        )
         await db.commit()
-        
-        logger.info("job_retrying", audio_file_id=str(audio_file.id), stage=stage, attempt=attempt, delay_seconds=delay_seconds)
-        # ARQ Retry exception automatically schedules the retry
+        delay_seconds = RETRY_DELAYS[attempt - 1]
+        logger.info("job_retrying", note_id=str(note.id), stage=stage, delay_seconds=delay_seconds)
         raise Retry(defer=delay_seconds)
+
+    processing_job.status = JobStatus.FAILED.value
+    if stage == "summary":
+        # The transcript remains readable; only the optional derived summary failed.
+        note.status = AudioStatus.COMPLETED.value
+        note.failure_stage = "summary"
+        note.failure_message = "Summary generation failed. You can still view the transcript."
     else:
-        # Terminal failure
-        processing_job.status = JobStatus.FAILED.value
-        processing_job.completed_at = datetime.now(UTC)
-        processing_job.retryable = False
-        
-        if stage == "summary":
-            # Don't fail the whole audio file if just the summary failed
-            audio_file.status = AudioStatus.COMPLETED.value
-            audio_file.failure_stage = "summary"
-            audio_file.failure_message = "Summary generation failed."
-            
-            # Update summary status
-            summary_stmt = select(Summary).where(Summary.audio_file_id == audio_file.id)
-            summary = (await db.execute(summary_stmt)).scalar_one_or_none()
-            if summary:
-                summary.status = SummaryStatus.FAILED.value
-        else:
-            audio_file.status = AudioStatus.FAILED.value
-            audio_file.failure_stage = stage
-            audio_file.failure_message = error_msg
-            
-        await db.commit()
-        logger.error("job_terminal_failure", audio_file_id=str(audio_file.id), stage=stage)
+        note.status = AudioStatus.FAILED.value
+        note.failure_stage = "transcription"
+        note.failure_message = "Transcription could not be completed. Please try again."
+    await db.commit()
+    logger.error(
+        "job_terminal_failure", note_id=str(note.id), stage=stage, error_type=type(error).__name__
+    )

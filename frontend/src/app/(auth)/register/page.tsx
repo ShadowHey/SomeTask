@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { api, ApiError } from "@/lib/api";
+import { createClient } from "@/lib/supabase";
 
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const router = useRouter();
+  const supabase = createClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,17 +17,17 @@ export default function Register() {
     setIsSubmitting(true);
 
     try {
-      await api.auth.register(email, password);
-      // Automatically log them in after registration
-      await api.auth.login(email, password);
-      // Wait for auth context to update, then redirect
-      window.location.href = "/dashboard";
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred.");
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      if (error) {
+        setError(error.message);
       }
+      // Note: AuthProvider automatically redirects on session change
+    } catch {
+      setError("An unexpected error occurred.");
     } finally {
       setIsSubmitting(false);
     }
@@ -70,7 +69,7 @@ export default function Register() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 placeholder-gray-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                  className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
                 />
               </div>
             </div>
@@ -89,7 +88,7 @@ export default function Register() {
                   minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 placeholder-gray-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                  className="block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
                 />
               </div>
               <p className="mt-1 text-xs text-gray-500">Must be at least 8 characters.</p>

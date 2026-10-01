@@ -1,21 +1,25 @@
-"""Gnani Speech-to-Text provider adapter."""
+"""Gnani Batch STT provider adapter."""
 
-from typing import Any, Protocol
+from __future__ import annotations
+
+from typing import Protocol
 
 import httpx
 
 from app.core.config import settings
-from app.core.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class ProviderError(Exception):
-    """Exception raised for external provider errors."""
+    """A classified provider error for the worker's retry policy."""
 
     def __init__(
-        self, message: str, retryable: bool = False, error_code: str | None = None, response_data: dict | None = None
-    ):
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        error_code: str | None = None,
+        response_data: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.error_code = error_code
@@ -23,144 +27,154 @@ class ProviderError(Exception):
 
 
 class TranscriptionProvider(Protocol):
-    async def create_job(self, audio_url: str, language_code: str) -> str:
-        """Create a transcription job and return the job ID."""
-        ...
+    """Application boundary for an asynchronous transcription provider."""
 
-    async def start_job(self, job_id: str) -> None:
-        """Start the created job."""
-        ...
+    async def create_job(self, audio_url: str, language_code: str) -> str: ...
 
-    async def poll_status(self, job_id: str) -> dict[str, Any]:
-        """Poll the job status. Returns status dict."""
-        ...
-        
-    async def get_files(self, job_id: str) -> list[dict[str, Any]]:
-        """Get file list for a completed job."""
-        ...
+    async def start_job(self, job_id: str) -> None: ...
 
-    async def download_transcript(self, transcript_url: str) -> dict[str, Any]:
-        """Download the transcript from the provider's URL."""
-        ...
+    async def poll_status(self, job_id: str) -> dict[str, object]: ...
+
+    async def get_files(self, job_id: str) -> list[dict[str, object]]: ...
+
+    async def download_transcript(self, transcript_url: str) -> dict[str, object]: ...
 
 
 class GnaniTranscriptionProvider:
-    """Adapter for Gnani STT Batch API."""
+    """HTTP implementation of Gnani's Create → Start → Poll → Files flow."""
 
-    def __init__(self) -> None:
-        self.base_url = settings.gnani_base_url
+    def __init__(
+        self,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> None:
+        self.base_url = settings.gnani_base_url.rstrip("/")
         self.api_key = settings.gnani_api_key
         self.model = settings.gnani_model
-        
+        self.transport = transport
+        self.timeout = timeout or httpx.Timeout(30.0, connect=10.0)
+
     @property
     def _headers(self) -> dict[str, str]:
-        return {
-            "X-API-Key-ID": self.api_key,
-            "Content-Type": "application/json",
-        }
+        return {"X-API-Key-ID": self.api_key, "Content-Type": "application/json"}
+
+    def _client(self, *, timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=self.transport, timeout=timeout or self.timeout)
 
     async def create_job(self, audio_url: str, language_code: str) -> str:
-        """Create a Gnani Batch STT job using a presigned R2 URL."""
-        url = f"{self.base_url}/stt/v3/batch/jobs"
-        payload = {
-            "config": {
-                "model": self.model,
-                "language_code": language_code or "en-IN",
-                "mode": "transcribe",
-                "with_diarization": False,
-                "is_multi_channel": False,
-                "with_denoise": False,
+        """Create a batch job with an R2/S3-compatible presigned source URL."""
+        data = await self._request_json(
+            "POST",
+            "/stt/v3/batch/jobs",
+            json={
+                "config": {
+                    "model": self.model,
+                    "language_code": language_code,
+                    "mode": "transcribe",
+                    "with_diarization": False,
+                    "is_multi_channel": False,
+                    "with_denoise": False,
+                },
+                "source": {
+                    "type": "cloud_storage",
+                    "auth": {"mode": "public"},
+                    "paths": [audio_url],
+                },
             },
-            "source": {
-                "type": "cloud_storage",
-                "auth": {"mode": "public"},
-                "paths": [audio_url],
-            },
-        }
-
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, headers=self._headers, json=payload, timeout=30.0)
-            except httpx.RequestError as e:
-                raise ProviderError(f"Network error: {e}", retryable=True)
-
-            if response.status_code in (401, 403):
-                raise ProviderError("Authentication failed with Gnani", retryable=False, error_code="auth_failed")
-            if response.status_code == 429:
-                raise ProviderError("Rate limited by Gnani", retryable=True, error_code="rate_limit")
-            if response.status_code >= 500:
-                raise ProviderError(f"Gnani server error: {response.status_code}", retryable=True)
-            if response.status_code >= 400:
-                data = response.json() if response.content else {}
-                # Documented long audio error
-                if data.get("error_code") == "AUDIO_TOO_LONG":
-                    raise ProviderError("Audio exceeds Gnani maximum length", retryable=False, error_code="AUDIO_TOO_LONG", response_data=data)
-                raise ProviderError(f"Bad request to Gnani: {response.text}", retryable=False, response_data=data)
-
-            data = response.json()
-            return data["job_id"]
+        )
+        job_id = data.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise ProviderError(
+                "Gnani create-job response contained no job ID", retryable=True, response_data=data
+            )
+        return job_id
 
     async def start_job(self, job_id: str) -> None:
-        """Start the created job."""
-        url = f"{self.base_url}/stt/v3/batch/jobs/{job_id}/start"
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, headers=self._headers, timeout=30.0)
-            except httpx.RequestError as e:
-                raise ProviderError(f"Network error: {e}", retryable=True)
+        """Start a previously created job; creation alone does not process audio."""
+        await self._request_json("POST", f"/stt/v3/batch/jobs/{job_id}/start")
 
-            if response.status_code >= 500:
-                raise ProviderError(f"Gnani server error: {response.status_code}", retryable=True)
-            if response.status_code >= 400:
-                data = response.json() if response.content else {}
-                raise ProviderError(f"Failed to start job: {response.text}", retryable=False, response_data=data)
+    async def poll_status(self, job_id: str) -> dict[str, object]:
+        """Read the status for a Gnani job."""
+        return await self._request_json("GET", f"/stt/v3/batch/jobs/{job_id}")
 
-    async def poll_status(self, job_id: str) -> dict[str, Any]:
-        """Poll the job status."""
-        url = f"{self.base_url}/stt/v3/batch/jobs/{job_id}"
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=self._headers, timeout=30.0)
-            except httpx.RequestError as e:
-                raise ProviderError(f"Network error: {e}", retryable=True)
-                
-            if response.status_code >= 500:
-                raise ProviderError(f"Gnani server error: {response.status_code}", retryable=True)
-            if response.status_code >= 400:
-                raise ProviderError(f"Failed to poll job: {response.text}", retryable=False)
-                
-            return response.json()
+    async def get_files(self, job_id: str) -> list[dict[str, object]]:
+        """Return Gnani's completed-file records, including temporary transcript URLs."""
+        data = await self._request_json("GET", f"/stt/v3/batch/jobs/{job_id}/files")
+        files = data.get("data")
+        if not isinstance(files, list):
+            raise ProviderError(
+                "Gnani files response was malformed", retryable=True, response_data=data
+            )
+        return [file for file in files if isinstance(file, dict)]
 
-    async def get_files(self, job_id: str) -> list[dict[str, Any]]:
-        """Get file list for a completed job."""
-        url = f"{self.base_url}/stt/v3/batch/jobs/{job_id}/files"
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=self._headers, timeout=30.0)
-            except httpx.RequestError as e:
-                raise ProviderError(f"Network error: {e}", retryable=True)
-                
-            if response.status_code >= 500:
-                raise ProviderError(f"Gnani server error: {response.status_code}", retryable=True)
-            if response.status_code >= 400:
-                raise ProviderError(f"Failed to get files: {response.text}", retryable=False)
-                
-            return response.json().get("files", [])
+    async def download_transcript(self, transcript_url: str) -> dict[str, object]:
+        """Download the expiring transcript JSON immediately after completion."""
+        return await self._request_json(
+            "GET", transcript_url, include_auth=False, timeout=httpx.Timeout(60.0, connect=10.0)
+        )
 
-    async def download_transcript(self, transcript_url: str) -> dict[str, Any]:
-        """Download the transcript from the provider's URL."""
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(transcript_url, timeout=60.0)
-            except httpx.RequestError as e:
-                raise ProviderError(f"Network error downloading transcript: {e}", retryable=True)
-                
-            if response.status_code >= 500:
-                raise ProviderError(f"Server error downloading transcript: {response.status_code}", retryable=True)
-            if response.status_code >= 400:
-                raise ProviderError(f"Failed to download transcript: {response.text}", retryable=False)
-                
-            return response.json()
+    async def _request_json(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        json: dict[str, object] | None = None,
+        include_auth: bool = True,
+        timeout: httpx.Timeout | None = None,
+    ) -> dict[str, object]:
+        url = path_or_url if path_or_url.startswith("http") else f"{self.base_url}{path_or_url}"
+        headers = self._headers if include_auth else None
+        try:
+            async with self._client(timeout=timeout) as client:
+                response = await client.request(method, url, headers=headers, json=json)
+        except httpx.TimeoutException as error:
+            raise ProviderError(
+                "Gnani request timed out", retryable=True, error_code="timeout"
+            ) from error
+        except httpx.RequestError as error:
+            raise ProviderError(
+                "Gnani request failed", retryable=True, error_code="network"
+            ) from error
+
+        data = _json_response(response)
+        if response.status_code in {401, 403}:
+            raise ProviderError(
+                "Gnani authentication failed", error_code="auth_failed", response_data=data
+            )
+        if response.status_code == 429:
+            raise ProviderError(
+                "Gnani rate limit reached",
+                retryable=True,
+                error_code="rate_limit",
+                response_data=data,
+            )
+        if response.status_code in {500, 502, 503, 504}:
+            raise ProviderError(
+                f"Gnani temporary server error ({response.status_code})",
+                retryable=True,
+                error_code=f"http_{response.status_code}",
+                response_data=data,
+            )
+        if response.status_code >= 400:
+            error_code = str(data.get("error_code", "bad_request"))
+            raise ProviderError(
+                f"Gnani rejected the request ({response.status_code})",
+                error_code=error_code,
+                response_data=data,
+            )
+        return data
+
+
+def _json_response(response: httpx.Response) -> dict[str, object]:
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise ProviderError(
+            "Gnani returned invalid JSON", retryable=True, error_code="invalid_json"
+        ) from error
+    if not isinstance(data, dict):
+        raise ProviderError(
+            "Gnani returned an unexpected JSON shape", retryable=True, error_code="invalid_json"
+        )
+    return data

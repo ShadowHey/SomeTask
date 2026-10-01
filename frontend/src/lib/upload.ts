@@ -1,122 +1,99 @@
 import { api } from "./api";
-import { UploadPartUrl } from "../types";
+import { createClient } from "./supabase";
+import { v4 as uuidv4 } from "uuid";
 
 export interface UploadProgress {
-  status: "initializing" | "uploading" | "completing" | "success" | "error";
-  progress: number; // 0 to 100
-  message?: string;
+  status: "preparing" | "uploading" | "completing" | "success" | "error";
+  progress: number; // 0-100
+  message: string;
 }
 
-/**
- * Handles the complete multipart upload flow:
- * 1. Initiates upload with backend
- * 2. Chunks file and uploads parts to R2 presigned URLs
- * 3. Completes upload with backend
- */
+const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB
+const ALLOWED_MIME_TYPES = [
+  "audio/wav",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/flac",
+  "audio/aac",
+  "audio/mp4",
+  "audio/x-m4a",
+];
+
 export async function uploadAudioFile(
   file: File,
-  languageCode: string,
   onProgress?: (progress: UploadProgress) => void
-): Promise<string> {
-  let audioFileId: string | null = null;
+): Promise<void> {
+  // Validate file
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error("File exceeds the maximum limit of 5 GB.");
+  }
+
+  if (!ALLOWED_MIME_TYPES.includes(file.type) && !file.name.match(/\.(wav|mp3|ogg|flac|aac|m4a)$/i)) {
+    throw new Error("Unsupported file format. Please upload WAV, MP3, OGG, FLAC, AAC, or M4A.");
+  }
+
+  const supabase = createClient();
 
   try {
-    onProgress?.({ status: "initializing", progress: 0, message: "Preparing upload..." });
+    // 1. Get current user
+    onProgress?.({ status: "preparing", progress: 0, message: "Preparing upload..." });
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("You must be logged in to upload files.");
 
-    // 1. Initiate upload
-    const initResponse = await api.upload.initiate(
-      file.name,
-      file.size,
-      file.type || "audio/mp3",
-      languageCode
-    );
+    const noteId = uuidv4();
+    const fileExtension = file.name.split('.').pop();
+    const storagePath = `users/${user.id}/${noteId}.${fileExtension}`;
 
-    audioFileId = initResponse.audio_file_id;
-    const { upload_id, part_urls, part_size } = initResponse;
+    // 2. Insert into DB (so FastAPI can pick it up via Postgres triggers or direct API call)
+    // Actually, we'll create the DB record via Supabase client to leverage RLS directly!
+    onProgress?.({ status: "uploading", progress: 10, message: "Creating record..." });
 
-    onProgress?.({ status: "uploading", progress: 5, message: "Uploading audio data..." });
+    const { error: dbError } = await supabase
+      .from('audio_notes')
+      .insert({
+        id: noteId,
+        user_id: user.id,
+        original_filename: file.name,
+        storage_path: storagePath,
+        size_bytes: file.size,
+        status: 'uploading'
+      });
 
-    // 2. Upload parts to R2 in parallel with concurrency limit
-    const uploadedParts: { part_number: number; etag: string }[] = [];
-    let completedPartsCount = 0;
-    const totalParts = part_urls.length;
+    if (dbError) throw new Error(`Failed to create database record: ${dbError.message}`);
 
-    // A simple concurrency queue (e.g. 3 parts at a time)
-    const MAX_CONCURRENCY = 3;
-    const queue = [...part_urls];
+    // 3. Upload to Supabase Storage
+    onProgress?.({ status: "uploading", progress: 30, message: "Uploading audio data..." });
 
-    const worker = async () => {
-      while (queue.length > 0) {
-        const part = queue.shift();
-        if (!part) break;
+    const { error: uploadError } = await supabase.storage
+      .from('audio-files')
+      .upload(storagePath, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
 
-        const start = (part.part_number - 1) * part_size;
-        const end = Math.min(start + part_size, file.size);
-        const blob = file.slice(start, end);
-
-        // Upload chunk directly to R2 using PUT
-        const response = await fetch(part.url, {
-          method: "PUT",
-          body: blob,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to upload part ${part.part_number}: ${response.statusText}`);
-        }
-
-        // R2 returns ETag in headers, with quotes. Need to extract it.
-        const etag = response.headers.get("etag")?.replace(/"/g, "") || "";
-        
-        if (!etag) {
-           console.warn(`No ETag returned for part ${part.part_number}. This might fail completion.`);
-        }
-
-        uploadedParts.push({
-          part_number: part.part_number,
-          etag,
-        });
-
-        completedPartsCount++;
-        
-        // Update progress (from 5% to 90%)
-        const progressPercent = 5 + Math.floor((completedPartsCount / totalParts) * 85);
-        onProgress?.({ 
-          status: "uploading", 
-          progress: progressPercent,
-          message: `Uploading... ${Math.round((completedPartsCount / totalParts) * 100)}%` 
-        });
-      }
-    };
-
-    // Run workers
-    const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, totalParts) }, worker);
-    await Promise.all(workers);
-
-    // 3. Complete upload
-    onProgress?.({ status: "completing", progress: 95, message: "Finalizing processing..." });
-    
-    await api.upload.complete(audioFileId, uploadedParts);
-    
-    onProgress?.({ status: "success", progress: 100, message: "Upload complete!" });
-    
-    return audioFileId;
-
-  } catch (error) {
-    // Attempt to abort if we failed midway and have an ID
-    if (audioFileId) {
-      try {
-        await api.upload.abort(audioFileId);
-      } catch (abortError) {
-        console.error("Failed to abort upload after error:", abortError);
-      }
+    if (uploadError) {
+      // Cleanup DB record if upload fails
+      await supabase.from('audio_notes').delete().match({ id: noteId });
+      throw new Error(`Upload failed: ${uploadError.message}`);
     }
-    
-    onProgress?.({ 
-      status: "error", 
-      progress: 0, 
-      message: error instanceof Error ? error.message : "Upload failed" 
-    });
-    
+
+    // 4. Update status in DB
+    onProgress?.({ status: "completing", progress: 90, message: "Finalizing..." });
+    const { error: finalizationError } = await supabase
+      .from('audio_notes')
+      .update({ status: 'uploaded' })
+      .match({ id: noteId });
+    if (finalizationError) {
+      throw new Error(`Failed to finalize upload: ${finalizationError.message}`);
+    }
+
+    // 5. Tell FastAPI to start the background job
+    await api.recordings.process(noteId);
+
+    onProgress?.({ status: "success", progress: 100, message: "Upload complete!" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error occurred";
+    onProgress?.({ status: "error", progress: 0, message });
     throw error;
   }
 }

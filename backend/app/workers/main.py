@@ -1,11 +1,13 @@
 """ARQ worker configuration and entrypoint."""
 
+from collections.abc import Callable
+from typing import Any, ClassVar
+
 from arq.connections import RedisSettings, create_pool
-from arq.worker import Worker
 
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
-from app.workers.tasks import generate_summary, process_transcription
+from app.workers.tasks import generate_summary, process_audio_note, process_transcription
 
 logger = get_logger(__name__)
 
@@ -27,13 +29,17 @@ async def shutdown(ctx: dict) -> None:
 class WorkerSettings:
     """Configuration for ARQ worker process."""
 
-    functions = [process_transcription, generate_summary]
+    functions: ClassVar[list[Callable[..., Any]]] = [
+        process_audio_note,
+        process_transcription,
+        generate_summary,
+    ]
     redis_settings = redis_settings
     on_startup = startup
     on_shutdown = shutdown
     max_jobs = 10
     job_timeout = 3600  # 1 hour max per job
-    
+
     # Retry policy is handled in the tasks themselves using arq.Retry
     # because different stages have different delays (1m, 5m, 10m).
     # ARQ will retry if the task raises an exception, but doing it manually
@@ -42,6 +48,7 @@ class WorkerSettings:
 
 # Helper to get a redis pool for enqueuing jobs from the web process
 _redis_pool = None
+
 
 async def get_redis_pool():  # type: ignore[no-untyped-def]
     """Get or create an ARQ Redis pool."""

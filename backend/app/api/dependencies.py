@@ -1,42 +1,33 @@
-"""FastAPI dependencies for authentication."""
+"""FastAPI dependencies for authentication via Supabase."""
 
 import uuid
 
-from fastapi import Cookie, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.db.session import get_db
-from app.models.models import User
-from app.services.auth.service import decode_access_token, get_user_by_id
+from app.core.supabase import supabase_client
+
+security = HTTPBearer()
 
 
-async def get_current_user(
-    db: AsyncSession = Depends(get_db),
-    access_token: str | None = Cookie(default=None),
-) -> User:
-    """Extract and validate the authenticated user from the HTTP-only cookie.
-
-    This is a FastAPI dependency used on every protected endpoint.
-    Never trust a user ID from the request body — always derive from the token.
+async def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> uuid.UUID:
     """
-    if not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
+    Validate the Supabase JWT token and extract the user's UUID.
+    This replaces our custom JWT/Argon2 logic because Supabase Auth handles identity.
+    """
+    token = credentials.credentials
+    try:
+        # We verify the JWT by asking Supabase to get the user for this token.
+        # This guarantees the token is valid, unexpired, and belongs to a real user.
+        response = supabase_client.auth.get_user(token)
+        if not response.user:
+            raise ValueError("No user found")
 
-    user_id: uuid.UUID | None = decode_access_token(access_token)
-    if user_id is None:
+        return uuid.UUID(response.user.id)
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
-        )
-
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-
-    return user
+        ) from None

@@ -17,17 +17,10 @@ class Settings(BaseSettings):
     # Redis (for ARQ)
     redis_url: str = "redis://localhost:6379"
 
-    # JWT
-    jwt_secret: str = "CHANGE-ME-IN-PRODUCTION"
-    jwt_algorithm: str = "HS256"
-    jwt_expiry_minutes: int = 60 * 24  # 24 hours
-
-    # Cloudflare R2
-    r2_endpoint_url: str = ""
-    r2_access_key_id: str = ""
-    r2_secret_access_key: str = ""
-    r2_bucket_name: str = "audio-notes"
-    r2_public_url: str = ""  # Not used — bucket is private
+    # Supabase Configuration
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_bucket_name: str = "audio-files"
 
     # Presigned URL lifetimes (seconds)
     upload_url_expiry: int = 900  # 15 minutes
@@ -38,12 +31,17 @@ class Settings(BaseSettings):
     gnani_api_key: str = ""
     gnani_base_url: str = "https://api.vachana.ai"
     gnani_model: str = "gnani-prisma-v2.5"
-    gnani_poll_interval_seconds: int = 15
-    gnani_max_poll_attempts: int = 720  # 3 hours at 15s intervals
+    # Gnani documents a 10-second minimum. Thirty seconds leaves a safe buffer
+    # after /start and avoids rate limiting under normal single-file usage.
+    gnani_poll_interval_seconds: int = 30
+    gnani_max_poll_attempts: int = 360  # 3 hours at 30-second intervals
+    # Batch language resolution is per file. hi-IN,en-IN is appropriate for the
+    # supplied Hinglish sample, but does not promise segment-level code switching.
+    gnani_default_language_code: str = "hi-IN,en-IN"
 
     # Gemini
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.5-flash"
 
     # Audio constraints
     max_file_size_bytes: int = 5 * 1024 * 1024 * 1024  # 5 GB

@@ -2,82 +2,50 @@
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
-
-
-# ── Auth ─────────────────────────────────────────────────────────────────────
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class UserResponse(BaseModel):
-    id: uuid.UUID
-    email: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
+from pydantic import BaseModel, Field
 
 # ── Upload ───────────────────────────────────────────────────────────────────
 
-class UploadInitiateRequest(BaseModel):
-    filename: str = Field(min_length=1, max_length=500)
-    file_size: int = Field(gt=0)
-    mime_type: str
-    language_code: str | None = Field(default="en-IN", max_length=50)
+
+class ProcessNoteRequest(BaseModel):
+    """Payload sent by the frontend after it successfully uploads a file to Supabase Storage."""
+
+    note_id: uuid.UUID
 
 
-class UploadPartUrl(BaseModel):
-    part_number: int
+class AudioUrlResponse(BaseModel):
+    """A short-lived, authorized URL for browser playback."""
+
     url: str
-
-
-class UploadInitiateResponse(BaseModel):
-    audio_file_id: uuid.UUID
-    upload_id: str
-    object_key: str
-    part_urls: list[UploadPartUrl]
-    part_size: int
-
-
-class UploadPartInfo(BaseModel):
-    part_number: int
-    etag: str
-
-
-class UploadCompleteRequest(BaseModel):
-    parts: list[UploadPartInfo]
-
-
-class UploadCompleteResponse(BaseModel):
-    audio_file_id: uuid.UUID
-    status: str
+    expires_in: int
 
 
 # ── Recordings ───────────────────────────────────────────────────────────────
 
+
 class RecordingListItem(BaseModel):
     id: uuid.UUID
     original_filename: str
-    display_name: str
-    size_bytes: int | None
-    duration_seconds: float | None
     status: str
-    language_code: str | None
-    summary_preview: str | None = None
+    size_bytes: Optional[int] = None
+    duration_seconds: Optional[float] = None
+    summary_preview: Optional[str] = None
     created_at: datetime
-    uploaded_at: datetime | None
-    completed_at: datetime | None
-    failure_stage: str | None
-    failure_message: str | None
+    updated_at: datetime
+    failure_stage: Optional[str] = None
+    failure_message: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class TranscriptSegmentResponse(BaseModel):
+    id: uuid.UUID
+    sequence_number: int
+    start_ms: Optional[int] = None
+    end_ms: Optional[int] = None
+    text: str
 
     model_config = {"from_attributes": True}
 
@@ -85,55 +53,32 @@ class RecordingListItem(BaseModel):
 class RecordingDetail(BaseModel):
     id: uuid.UUID
     original_filename: str
-    display_name: str
-    size_bytes: int | None
-    duration_seconds: float | None
     status: str
-    language_code: str | None
-    mime_type: str
+    storage_path: str
+    size_bytes: Optional[int] = None
+    duration_seconds: Optional[float] = None
     created_at: datetime
-    uploaded_at: datetime | None
-    completed_at: datetime | None
-    failure_stage: str | None
-    failure_code: str | None
-    failure_message: str | None
-    transcript_segments: list["TranscriptSegmentResponse"] = []
-    summary: "SummaryResponse | None" = None
+    updated_at: datetime
+    failure_stage: Optional[str] = None
+    failure_message: Optional[str] = None
+    summary: Optional[str] = None
+    transcript_segments: list[TranscriptSegmentResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
 
 class RecordingUpdateRequest(BaseModel):
-    display_name: str = Field(min_length=1, max_length=500)
-
-
-class TranscriptSegmentResponse(BaseModel):
-    id: uuid.UUID
-    sequence: int
-    start_ms: int | None
-    end_ms: int | None
-    text: str
-
-    model_config = {"from_attributes": True}
-
-
-class SummaryResponse(BaseModel):
-    content: str | None
-    provider: str
-    model: str | None
-    status: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+    original_filename: str = Field(min_length=1, max_length=500)
 
 
 # ── Search ───────────────────────────────────────────────────────────────────
 
+
 class TranscriptSearchResult(BaseModel):
     segment_id: uuid.UUID
     text: str
-    start_ms: int | None
-    end_ms: int | None
+    start_ms: Optional[int] = None
+    end_ms: Optional[int] = None
     similarity: float
 
 
@@ -145,34 +90,25 @@ class TranscriptSearchResponse(BaseModel):
 
 # ── Status ───────────────────────────────────────────────────────────────────
 
-class RecordingStatusResponse(BaseModel):
-    audio_file_id: uuid.UUID
-    status: str
-    failure_stage: str | None
-    failure_message: str | None
-    processing_jobs: list["ProcessingJobResponse"] = []
-
 
 class ProcessingJobResponse(BaseModel):
     id: uuid.UUID
     job_type: str
     status: str
     attempt_count: int
-    last_error: str | None
-    started_at: datetime | None
-    completed_at: datetime | None
-
     model_config = {"from_attributes": True}
 
 
-# ── Audio URL ────────────────────────────────────────────────────────────────
-
-class AudioUrlResponse(BaseModel):
-    url: str
-    expires_in: int
+class RecordingStatusResponse(BaseModel):
+    id: uuid.UUID
+    status: str
+    failure_stage: Optional[str] = None
+    failure_message: Optional[str] = None
+    processing_jobs: list[ProcessingJobResponse] = Field(default_factory=list)
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
+
 
 class HealthResponse(BaseModel):
     status: str

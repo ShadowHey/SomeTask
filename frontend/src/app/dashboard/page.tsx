@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { uploadAudioFile, UploadProgress } from "@/lib/upload";
 import type { RecordingListItem } from "@/types";
+import { useAuth } from "@/components/AuthProvider";
 
 export default function Dashboard() {
+  const { isLoading: isAuthLoading } = useAuth();
   const [recordings, setRecordings] = useState<RecordingListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -15,7 +17,7 @@ export default function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
-  const fetchRecordings = async () => {
+  const fetchRecordings = useCallback(async () => {
     try {
       const data = await api.recordings.list();
       setRecordings(data);
@@ -25,26 +27,23 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchRecordings();
-    
-    // Poll for updates if any recordings are pending
+    if (isAuthLoading) return;
+
+    const initialLoad = window.setTimeout(() => void fetchRecordings(), 0);
+
+    // Refresh while the dashboard is open so background status changes appear.
     const interval = setInterval(() => {
-      setRecordings((current) => {
-        const hasPending = current.some((r) => 
-          ["created", "uploading", "uploaded", "queued", "transcribing", "summarizing"].includes(r.status)
-        );
-        if (hasPending) {
-          fetchRecordings();
-        }
-        return current;
-      });
+      void fetchRecordings();
     }, 5000);
     
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      window.clearTimeout(initialLoad);
+      clearInterval(interval);
+    };
+  }, [fetchRecordings, isAuthLoading]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -56,7 +55,7 @@ export default function Dashboard() {
     }
 
     try {
-      await uploadAudioFile(file, "en-IN", (progress) => {
+      await uploadAudioFile(file, (progress) => {
         setUploadProgress(progress);
       });
       
@@ -159,7 +158,7 @@ export default function Dashboard() {
                 <div className="flex w-full items-center justify-between space-x-6 p-6">
                   <div className="flex-1 truncate">
                     <div className="flex items-center space-x-3">
-                      <h3 className="truncate text-sm font-medium text-gray-900">{recording.display_name}</h3>
+                      <h3 className="truncate text-sm font-medium text-gray-900">{recording.original_filename}</h3>
                       <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusColor(recording.status)}`}>
                         {recording.status.toUpperCase()}
                       </span>
@@ -169,6 +168,10 @@ export default function Dashboard() {
                     {recording.summary_preview ? (
                       <p className="mt-4 text-sm text-gray-600 line-clamp-3">
                         {recording.summary_preview}
+                      </p>
+                    ) : recording.failure_message ? (
+                      <p className="mt-4 rounded bg-red-50 p-2 text-sm text-red-700 line-clamp-3">
+                        {recording.failure_message}
                       </p>
                     ) : (
                       <div className="mt-4 h-12 rounded bg-gray-50 flex items-center justify-center text-xs text-gray-400">

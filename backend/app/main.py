@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, health, recordings, uploads
+from app.api.routes import health, recordings
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
 
@@ -42,6 +42,4 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router)
-app.include_router(auth.router, prefix="/api")
-app.include_router(uploads.router, prefix="/api")
-app.include_router(recordings.router, prefix="/api")
+app.include_router(recordings.router, prefix="/api/recordings")

@@ -1,19 +1,24 @@
-"""Recording management API routes."""
+"""Authorized recording-management and processing endpoints."""
+
+from __future__ import annotations
 
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user_id
+from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.supabase import supabase_client
 from app.db.session import get_db
 from app.models.enums import AudioStatus
-from app.models.models import AudioFile, ProcessingJob, Summary, TranscriptSegment, User
+from app.models.models import AudioNote
 from app.schemas.schemas import (
     AudioUrlResponse,
+    ProcessNoteRequest,
     RecordingDetail,
     RecordingListItem,
     RecordingStatusResponse,
@@ -21,287 +26,247 @@ from app.schemas.schemas import (
     TranscriptSearchResponse,
     TranscriptSearchResult,
 )
-from app.services.storage.r2 import storage_service
+from app.workers.main import get_redis_pool
 
 logger = get_logger(__name__)
+router = APIRouter()
 
-router = APIRouter(prefix="/recordings", tags=["recordings"])
+
+@router.post("", response_model=RecordingDetail, status_code=status.HTTP_201_CREATED)
+async def start_processing(
+    request: ProcessNoteRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> AudioNote:
+    """Queue an authenticated user's successfully uploaded recording exactly once."""
+    result = await db.execute(
+        select(AudioNote).where(AudioNote.id == request.note_id, AudioNote.user_id == user_id)
+    )
+    note = result.scalar_one_or_none()
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+    if note.status not in {AudioStatus.CREATED.value, AudioStatus.UPLOADED.value}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Recording is already processing"
+        )
+
+    note.status = AudioStatus.QUEUED.value
+    await db.commit()
+    try:
+        redis = await get_redis_pool()
+        await redis.enqueue_job("process_audio_note", note.id)
+    except Exception as error:
+        # Keep the record retryable by the user instead of displaying a permanent queued state.
+        note.status = AudioStatus.UPLOADED.value
+        await db.commit()
+        logger.error(
+            "recording_enqueue_failed", note_id=str(note.id), error_type=type(error).__name__
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Processing could not be queued. Please try again.",
+        ) from error
+    logger.info("recording_queued", recording_id=str(note.id), user_id=str(user_id))
+    return await _get_owned_note(db, note.id, user_id, include_segments=True)
 
 
 @router.get("", response_model=list[RecordingListItem])
 async def list_recordings(
+    user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
 ) -> list[RecordingListItem]:
-    """Get history of recordings for the authenticated user."""
-    # Enforce ownership in the query
-    stmt = (
-        select(AudioFile)
-        .where(AudioFile.user_id == current_user.id)
-        .where(AudioFile.status != AudioStatus.DELETED.value)
-        .options(selectinload(AudioFile.summary))
-        .order_by(desc(AudioFile.created_at))
-        .limit(limit)
-        .offset(offset)
-    )
-
-    result = await db.execute(stmt)
-    recordings = result.scalars().all()
-
-    # Map to response schema, extracting summary preview if available
-    items = []
-    for rec in recordings:
-        summary_preview = None
-        if rec.summary and rec.summary.content:
-            # Simple truncation for preview
-            summary_preview = rec.summary.content[:200]
-            if len(rec.summary.content) > 200:
-                summary_preview += "..."
-
-        item = RecordingListItem.model_validate(
-            rec, update={"summary_preview": summary_preview}
+    """Return only recordings belonging to the authenticated user."""
+    notes = (
+        (
+            await db.execute(
+                select(AudioNote)
+                .where(AudioNote.user_id == user_id)
+                .order_by(AudioNote.created_at.desc())
+            )
         )
-        items.append(item)
+        .scalars()
+        .all()
+    )
+    return [
+        RecordingListItem(
+            id=note.id,
+            original_filename=note.original_filename,
+            status=note.status,
+            size_bytes=note.size_bytes,
+            duration_seconds=note.duration_seconds,
+            summary_preview=(note.summary[:150] + "…")
+            if note.summary and len(note.summary) > 150
+            else note.summary,
+            created_at=note.created_at,
+            updated_at=note.updated_at,
+            failure_stage=note.failure_stage,
+            failure_message=note.failure_message,
+        )
+        for note in notes
+    ]
 
-    return items
+
+async def _get_owned_note(
+    db: AsyncSession,
+    note_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    include_segments: bool = False,
+    include_jobs: bool = False,
+) -> AudioNote:
+    options = []
+    if include_segments:
+        options.append(selectinload(AudioNote.transcript_segments))
+    if include_jobs:
+        options.append(selectinload(AudioNote.processing_jobs))
+    note = (
+        await db.execute(
+            select(AudioNote)
+            .where(AudioNote.id == note_id, AudioNote.user_id == user_id)
+            .options(*options)
+        )
+    ).scalar_one_or_none()
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+    return note
 
 
-@router.get("/{audio_file_id}", response_model=RecordingDetail)
+@router.get("/{note_id}", response_model=RecordingDetail)
 async def get_recording(
-    audio_file_id: str,
+    note_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> RecordingDetail:
-    """Get full details of a specific recording."""
-    stmt = (
-        select(AudioFile)
-        .where(
-            AudioFile.id == audio_file_id,
-            AudioFile.user_id == current_user.id,
-            AudioFile.status != AudioStatus.DELETED.value,
-        )
-        .options(
-            selectinload(AudioFile.transcript_segments),
-            selectinload(AudioFile.summary),
-        )
-    )
-
-    result = await db.execute(stmt)
-    recording = result.scalar_one_or_none()
-    if not recording:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    return RecordingDetail.model_validate(recording)
+) -> AudioNote:
+    return await _get_owned_note(db, note_id, user_id, include_segments=True)
 
 
-@router.patch("/{audio_file_id}", response_model=RecordingDetail)
-async def update_recording(
-    audio_file_id: str,
-    body: RecordingUpdateRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> RecordingDetail:
-    """Update recording metadata (e.g., rename)."""
-    stmt = (
-        select(AudioFile)
-        .where(
-            AudioFile.id == audio_file_id,
-            AudioFile.user_id == current_user.id,
-            AudioFile.status != AudioStatus.DELETED.value,
-        )
-        .options(
-            selectinload(AudioFile.transcript_segments),
-            selectinload(AudioFile.summary),
-        )
-    )
-
-    result = await db.execute(stmt)
-    recording = result.scalar_one_or_none()
-    if not recording:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    recording.display_name = body.display_name
-    await db.commit()
-    await db.refresh(recording)
-
-    logger.info("recording_renamed", user_id=str(current_user.id), recording_id=str(recording.id))
-
-    return RecordingDetail.model_validate(recording)
-
-
-@router.delete("/{audio_file_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_recording(
-    audio_file_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> None:
-    """Soft delete a recording."""
-    stmt = select(AudioFile).where(
-        AudioFile.id == audio_file_id,
-        AudioFile.user_id == current_user.id,
-    )
-
-    result = await db.execute(stmt)
-    recording = result.scalar_one_or_none()
-    if not recording:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    recording.status = AudioStatus.DELETED.value
-    await db.commit()
-
-    logger.info("recording_deleted", user_id=str(current_user.id), recording_id=str(recording.id))
-
-    # Note: A background cleanup job could eventually hard-delete the DB records
-    # and the R2 object to save space, but soft delete is safer for the take-home.
-
-
-@router.get("/{audio_file_id}/status", response_model=RecordingStatusResponse)
+@router.get("/{note_id}/status", response_model=RecordingStatusResponse)
 async def get_recording_status(
-    audio_file_id: str,
+    note_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> RecordingStatusResponse:
-    """Get the current processing status and active jobs."""
-    stmt = (
-        select(AudioFile)
-        .where(
-            AudioFile.id == audio_file_id,
-            AudioFile.user_id == current_user.id,
-            AudioFile.status != AudioStatus.DELETED.value,
-        )
-        .options(selectinload(AudioFile.processing_jobs))
-    )
-
-    result = await db.execute(stmt)
-    recording = result.scalar_one_or_none()
-    if not recording:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    return RecordingStatusResponse(
-        audio_file_id=recording.id,
-        status=recording.status,
-        failure_stage=recording.failure_stage,
-        failure_message=recording.failure_message,
-        processing_jobs=recording.processing_jobs,
-    )
+) -> AudioNote:
+    return await _get_owned_note(db, note_id, user_id, include_jobs=True)
 
 
-@router.get("/{audio_file_id}/audio-url", response_model=AudioUrlResponse)
+@router.get("/{note_id}/audio-url", response_model=AudioUrlResponse)
 async def get_audio_url(
-    audio_file_id: str,
+    note_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> AudioUrlResponse:
-    """Get a short-lived presigned URL to play/download the audio."""
-    stmt = select(AudioFile).where(
-        AudioFile.id == audio_file_id,
-        AudioFile.user_id == current_user.id,
-        AudioFile.status != AudioStatus.DELETED.value,
-    )
-
-    result = await db.execute(stmt)
-    recording = result.scalar_one_or_none()
-    if not recording:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    if recording.status in (AudioStatus.CREATED.value, AudioStatus.UPLOADING.value):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Audio not fully uploaded")
-
-    try:
-        url = storage_service.generate_presigned_download_url(recording.object_key)
-        return AudioUrlResponse(url=url, expires_in=3600)  # 1 hour default
-    except Exception as e:
-        logger.error("audio_url_generation_failed", recording_id=audio_file_id, error=str(e))
+    """Issue a server-authorized, short-lived URL for the owned audio object."""
+    note = await _get_owned_note(db, note_id, user_id)
+    if note.status in {AudioStatus.CREATED.value, AudioStatus.UPLOADING.value}:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to generate audio URL",
+            status_code=status.HTTP_409_CONFLICT, detail="Audio is not uploaded yet"
         )
-
-
-@router.get("/{audio_file_id}/transcript/search", response_model=TranscriptSearchResponse)
-async def search_transcript(
-    audio_file_id: str,
-    q: str = Query(..., min_length=2),
-    limit: int = Query(10, ge=1, le=50),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> TranscriptSearchResponse:
-    """Fuzzy search the transcript using pg_trgm."""
-    # First verify ownership
-    stmt_auth = select(AudioFile.id).where(
-        AudioFile.id == audio_file_id,
-        AudioFile.user_id == current_user.id,
-        AudioFile.status != AudioStatus.DELETED.value,
-    )
-    result_auth = await db.execute(stmt_auth)
-    if not result_auth.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-
-    # Use pg_trgm similarity to find and rank matches.
-    # similarity() function requires pg_trgm extension.
-    # ILIKE is used as a fallback or for exact substring matches, but for fuzzy we use similarity.
-    # The `<->` operator is for distance, `similarity` is for score (0.0 to 1.0).
-    similarity_expr = func.similarity(TranscriptSegment.text, q).label("similarity")
-
-    stmt = (
-        select(TranscriptSegment, similarity_expr)
-        .where(
-            TranscriptSegment.audio_file_id == audio_file_id,
-            TranscriptSegment.text.op("%%")(q),  # %% is the pg_trgm similarity operator in SQLAlchemy
-        )
-        .order_by(desc("similarity"))
-        .limit(limit)
-    )
-
     try:
-        result = await db.execute(stmt)
-        rows = result.all()
+        response = supabase_client.storage.from_(settings.supabase_bucket_name).create_signed_url(
+            note.storage_path,
+            expires_in=settings.download_url_expiry,
+        )
+        signed_url = response.get("signedURL") or response.get("signedUrl")
+    except Exception as error:
+        logger.error(
+            "audio_url_generation_failed",
+            recording_id=str(note.id),
+            error_type=type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Audio is temporarily unavailable"
+        ) from error
+    if not signed_url:
+        logger.error("audio_url_missing", recording_id=str(note.id))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Audio is temporarily unavailable"
+        )
+    return AudioUrlResponse(url=signed_url, expires_in=settings.download_url_expiry)
 
-        results = []
-        for segment, similarity in rows:
-            results.append(
-                TranscriptSearchResult(
-                    segment_id=segment.id,
-                    text=segment.text,
-                    start_ms=segment.start_ms,
-                    end_ms=segment.end_ms,
-                    similarity=float(similarity),
-                )
-            )
 
-        return TranscriptSearchResponse(query=q, results=results, total=len(results))
+@router.patch("/{note_id}", response_model=RecordingDetail)
+async def update_recording(
+    note_id: uuid.UUID,
+    update_data: RecordingUpdateRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> AudioNote:
+    note = await _get_owned_note(db, note_id, user_id, include_segments=True)
+    note.original_filename = update_data.original_filename.strip()
+    await db.commit()
+    await db.refresh(note)
+    logger.info("recording_renamed", recording_id=str(note.id), user_id=str(user_id))
+    return note
 
-    except Exception as e:
-        # If pg_trgm is not installed or fails, fallback to simple ILIKE
+
+@router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recording(
+    note_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    note = await _get_owned_note(db, note_id, user_id)
+    try:
+        supabase_client.storage.from_(settings.supabase_bucket_name).remove([note.storage_path])
+    except Exception as error:
         logger.warning(
-            "pg_trgm_search_failed",
-            error=str(e),
-            action="falling_back_to_ilike",
-            recording_id=audio_file_id,
+            "storage_delete_failed", recording_id=str(note.id), error_type=type(error).__name__
         )
+    await db.delete(note)
+    await db.commit()
+    logger.info("recording_deleted", recording_id=str(note.id), user_id=str(user_id))
 
-        stmt_fallback = (
-            select(TranscriptSegment)
-            .where(
-                TranscriptSegment.audio_file_id == audio_file_id,
-                TranscriptSegment.text.ilike(f"%{q}%"),
+
+@router.get("/{note_id}/search", response_model=TranscriptSearchResponse)
+async def search_transcript(
+    note_id: uuid.UUID,
+    q: str = Query(min_length=2, max_length=200),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TranscriptSearchResponse:
+    """Search an owned transcript with pg_trgm, falling back to exact substring search."""
+    await _get_owned_note(db, note_id, user_id)
+    try:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, text, start_ms, end_ms, similarity(text, :query) AS similarity
+                    FROM transcript_segments
+                    WHERE note_id = :note_id AND (text % :query OR text ILIKE :contains)
+                    ORDER BY similarity DESC, sequence_number
+                    LIMIT 20
+                    """
+                ),
+                {"note_id": note_id, "query": q, "contains": f"%{q}%"},
             )
-            .order_by(TranscriptSegment.sequence)
-            .limit(limit)
+        ).all()
+    except Exception as error:
+        logger.warning(
+            "pg_trgm_search_failed", recording_id=str(note_id), error_type=type(error).__name__
         )
-        result_fallback = await db.execute(stmt_fallback)
-        segments = result_fallback.scalars().all()
-
-        results = [
-            TranscriptSearchResult(
-                segment_id=segment.id,
-                text=segment.text,
-                start_ms=segment.start_ms,
-                end_ms=segment.end_ms,
-                similarity=1.0,  # Exact match
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, text, start_ms, end_ms, 1.0 AS similarity
+                    FROM transcript_segments
+                    WHERE note_id = :note_id AND text ILIKE :contains
+                    ORDER BY sequence_number
+                    LIMIT 20
+                    """
+                ),
+                {"note_id": note_id, "contains": f"%{q}%"},
             )
-            for segment in segments
-        ]
-        return TranscriptSearchResponse(query=q, results=results, total=len(results))
+        ).all()
+    results = [
+        TranscriptSearchResult(
+            segment_id=row.id,
+            text=row.text,
+            start_ms=row.start_ms,
+            end_ms=row.end_ms,
+            similarity=float(row.similarity),
+        )
+        for row in rows
+    ]
+    return TranscriptSearchResponse(query=q, results=results, total=len(results))

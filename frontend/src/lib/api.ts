@@ -1,119 +1,71 @@
-import type {
-  AudioUrlResponse,
-  RecordingDetail,
-  RecordingListItem,
-  RecordingStatusResponse,
-  TranscriptSearchResponse,
-  UploadInitiateResponse,
-  User,
-} from "../types";
+import type { RecordingDetail, RecordingListItem, TranscriptSearchResponse } from "../types";
 
-// Base API URL - pointing to FastAPI backend
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 export class ApiError extends Error {
-  constructor(public status: number, public message: string, public data?: any) {
+  constructor(public status: number, message: string) {
     super(message);
     this.name = "ApiError";
   }
 }
 
-/**
- * Custom fetch wrapper that handles API errors and automatically includes credentials for cookies
- */
-async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_URL}${endpoint}`;
-  const headers = {
-    "Content-Type": "application/json",
-    ...options.headers,
-  };
+// Global variable to hold the Supabase JWT token injected by the AuthProvider
+let currentApiToken: string | null = null;
 
-  const response = await fetch(url, {
+export const setApiToken = (token: string | null) => {
+  currentApiToken = token;
+};
+
+async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (currentApiToken) {
+    headers.set("Authorization", `Bearer ${currentApiToken}`);
+  }
+
+  if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
-    credentials: "include", // Essential for sending/receiving HTTP-only cookies
   });
 
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+    throw new ApiError(response.status, errorData.detail || "API request failed");
+  }
+
+  // 204 No Content returns no JSON
   if (response.status === 204) {
     return {} as T;
   }
 
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      data?.detail || response.statusText || "An API error occurred",
-      data
-    );
-  }
-
-  return data as T;
+  return response.json();
 }
 
-// -- Auth --
-
 export const api = {
-  auth: {
-    me: () => fetchApi<User>("/auth/me"),
-    login: (email: string, password: string) =>
-      fetchApi<User>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      }),
-    register: (email: string, password: string) =>
-      fetchApi<User>("/auth/register", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      }),
-    logout: () => fetchApi<void>("/auth/logout", { method: "POST" }),
-  },
-
-  // -- Upload --
-  
-  upload: {
-    initiate: (filename: string, file_size: number, mime_type: string, language_code = "en-IN") =>
-      fetchApi<UploadInitiateResponse>("/uploads/initiate", {
-        method: "POST",
-        body: JSON.stringify({ filename, file_size, mime_type, language_code }),
-      }),
-    complete: (audio_file_id: string, parts: { part_number: number; etag: string }[]) =>
-      fetchApi<{ status: string }>(`/uploads/${audio_file_id}/complete`, {
-        method: "POST",
-        body: JSON.stringify({ parts }),
-      }),
-    abort: (audio_file_id: string) =>
-      fetchApi<void>(`/uploads/${audio_file_id}/abort`, {
-        method: "POST",
-      }),
-  },
-
-  // -- Recordings --
-  
   recordings: {
-    list: (limit = 50, offset = 0) =>
-      fetchApi<RecordingListItem[]>(`/recordings?limit=${limit}&offset=${offset}`),
-      
-    get: (id: string) => fetchApi<RecordingDetail>(`/recordings/${id}`),
-    
-    update: (id: string, display_name: string) =>
+    // Called after direct Supabase Storage upload to enqueue the processing job
+    process: (note_id: string) =>
+      fetchApi<RecordingDetail>("/recordings", {
+        method: "POST",
+        body: JSON.stringify({ note_id }),
+      }),
+    list: () =>
+      fetchApi<RecordingListItem[]>("/recordings"),
+    get: (id: string) =>
+      fetchApi<RecordingDetail>(`/recordings/${id}`),
+    getAudioUrl: (id: string) =>
+      fetchApi<{ url: string; expires_in: number }>(`/recordings/${id}/audio-url`),
+    update: (id: string, original_filename: string) =>
       fetchApi<RecordingDetail>(`/recordings/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ display_name }),
+        body: JSON.stringify({ original_filename }),
       }),
-      
     delete: (id: string) =>
       fetchApi<void>(`/recordings/${id}`, { method: "DELETE" }),
-      
-    getStatus: (id: string) =>
-      fetchApi<RecordingStatusResponse>(`/recordings/${id}/status`),
-      
-    getAudioUrl: (id: string) =>
-      fetchApi<AudioUrlResponse>(`/recordings/${id}/audio-url`),
-      
-    searchTranscript: (id: string, query: string, limit = 10) =>
-      fetchApi<TranscriptSearchResponse>(
-        `/recordings/${id}/transcript/search?q=${encodeURIComponent(query)}&limit=${limit}`
-      ),
+    searchTranscript: (id: string, query: string) =>
+      fetchApi<TranscriptSearchResponse>(`/recordings/${id}/search?q=${encodeURIComponent(query)}`),
   },
 };
