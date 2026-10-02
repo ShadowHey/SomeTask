@@ -97,7 +97,40 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                 logger.info(
                     "transcription_started", note_id=str(note.id), provider_job_id=processing_job.provider_job_id
                 )
-            # Worker finishes successfully here. Webhook handles the rest.
+            
+            if not settings.gnani_webhook_url:
+                logger.info(
+                    "transcription_polling_mode",
+                    note_id=str(note.id),
+                    provider_job_id=processing_job.provider_job_id,
+                )
+                while True:
+                    await asyncio.sleep(10)
+                    status_info = await provider.poll_status(processing_job.provider_job_id)
+                    job_status = str(status_info.get("status", "")).upper()
+                    logger.info(
+                        "transcription_polling_status",
+                        note_id=str(note.id),
+                        job_status=job_status,
+                    )
+                    if job_status == "COMPLETED":
+                        await asyncio.sleep(2)
+                        transcript_json = await _download_transcript(
+                            provider, processing_job.provider_job_id
+                        )
+                        await _store_transcript(db, note, processing_job, transcript_json)
+                        logger.info(
+                            "transcription_completed_via_polling",
+                            note_id=str(note.id),
+                            provider_job_id=processing_job.provider_job_id,
+                        )
+                        break
+                    if job_status in _TERMINAL_GNANI_STATUSES:
+                        raise ProviderError(
+                            f"Gnani job terminated with status: {job_status}",
+                            retryable=False,
+                            response_data=status_info,
+                        )
         except ProviderError as error:
             await db.rollback()
             await _handle_job_failure(

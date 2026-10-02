@@ -57,13 +57,14 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-      <div className="flex items-end justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-        <div className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" aria-hidden="true" onClick={onClose}></div>
-        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-        <div className="inline-block px-4 pt-5 pb-4 overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
-          <div>
-            <h3 className="text-lg font-medium leading-6 text-gray-900" id="modal-title">Upload Audio Note</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity" aria-hidden="true" onClick={onClose} />
+      
+      {/* Modal Card */}
+      <div className="relative z-10 w-full max-w-lg bg-white rounded-xl shadow-2xl p-6 sm:p-8 overflow-hidden transform transition-all text-left">
+        <div>
+          <h3 className="text-xl font-semibold leading-6 text-gray-900" id="modal-title">Upload Audio Note</h3>
             <div className="mt-4 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">Audio File</label>
@@ -81,7 +82,7 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                 <select
                   value={config.language_code}
                   onChange={(e) => setConfig({ ...config, language_code: e.target.value })}
-                  className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 >
                   <option value="en-IN">English (India)</option>
                   <option value="hi-IN">Hindi (India)</option>
@@ -116,7 +117,7 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                     max={2}
                     value={config.num_speakers || 2}
                     onChange={(e) => setConfig({ ...config, num_speakers: parseInt(e.target.value) })}
-                    className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximum 2 speakers supported.</p>
                 </div>
@@ -183,6 +184,5 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
           </div>
         </div>
       </div>
-    </div>
   );
 }

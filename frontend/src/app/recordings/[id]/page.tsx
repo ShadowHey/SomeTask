@@ -272,10 +272,8 @@ export default function RecordingDetailPage({
                 </p>
               )}
             </section>
-          </div>
 
-          {/* Sidebar */}
-          <div className="space-y-8">
+            {/* AI Summary Section */}
             <section className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 p-6 shadow-sm ring-1 ring-blue-100">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center space-x-2">
@@ -288,9 +286,9 @@ export default function RecordingDetailPage({
                   <button
                     onClick={handleGenerateSummary}
                     disabled={isGeneratingSummary}
-                    className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+                    className="text-sm bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
                   >
-                    {isGeneratingSummary ? "Requesting..." : "Generate Summary"}
+                    {isGeneratingSummary ? "Requesting..." : "Request an AI Summary"}
                   </button>
                 )}
               </div>
@@ -300,18 +298,32 @@ export default function RecordingDetailPage({
                   {recording.summary}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500 italic">
-                  {recording.summary_status === "failed" 
-                    ? "Summary generation failed." 
-                    : recording.summary_status === "queued" || recording.summary_status === "processing" 
-                    ? "Generating smart summary..." 
-                    : recording.status !== "transcription_completed" 
-                    ? "Transcript must be completed first." 
-                    : "No summary available."}
-                </p>
+                <div className="flex flex-col items-center justify-center p-8 bg-white/50 rounded-lg border border-blue-100 border-dashed">
+                  <p className="text-sm text-gray-500 italic text-center">
+                    {recording.summary_status === "failed" 
+                      ? "Summary generation failed. You can try again later." 
+                      : recording.summary_status === "queued" || recording.summary_status === "processing" 
+                      ? "Generating smart summary... This will just take a moment." 
+                      : recording.status !== "transcription_completed" 
+                      ? "Transcript must be completed first before requesting a summary." 
+                      : "No summary generated yet. Click the button above to request one."}
+                  </p>
+                  {recording.status === "transcription_completed" && recording.summary_status !== "completed" && recording.summary_status !== "processing" && recording.summary_status !== "queued" && (
+                    <button
+                      onClick={handleGenerateSummary}
+                      disabled={isGeneratingSummary}
+                      className="mt-4 text-sm bg-blue-600 text-white px-6 py-2 rounded-full hover:bg-blue-700 shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      {isGeneratingSummary ? "Requesting..." : "Request an AI Summary"}
+                    </button>
+                  )}
+                </div>
               )}
             </section>
+          </div>
 
+          {/* Sidebar */}
+          <div className="space-y-8">
             {/* Search Section */}
             <section className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Search in Transcript</h2>

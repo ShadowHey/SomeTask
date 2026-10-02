@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+import asyncio
 import httpx
 
 from app.core.config import settings
@@ -64,8 +65,9 @@ class GnaniTranscriptionProvider:
 
     async def create_job(self, audio_url: str, config: dict, callback_url: str | None = None) -> str:
         """Create a batch job with an R2/S3-compatible presigned source URL."""
+        batch_config = {"model": self.model, **config}
         payload = {
-            "config": config,
+            "config": batch_config,
             "source": {
                 "type": "cloud_storage",
                 "auth": {"mode": "public"},
@@ -122,17 +124,27 @@ class GnaniTranscriptionProvider:
     ) -> dict[str, object]:
         url = path_or_url if path_or_url.startswith("http") else f"{self.base_url}{path_or_url}"
         headers = self._headers if include_auth else None
-        try:
-            async with self._client(timeout=timeout) as client:
-                response = await client.request(method, url, headers=headers, json=json)
-        except httpx.TimeoutException as error:
-            raise ProviderError(
-                "Gnani request timed out", retryable=True, error_code="timeout"
-            ) from error
-        except httpx.RequestError as error:
-            raise ProviderError(
-                "Gnani request failed", retryable=True, error_code="network"
-            ) from error
+        response = None
+        for attempt in range(5):
+            try:
+                async with self._client(timeout=timeout) as client:
+                    response = await client.request(method, url, headers=headers, json=json)
+            except httpx.TimeoutException as error:
+                raise ProviderError(
+                    "Gnani request timed out", retryable=True, error_code="timeout"
+                ) from error
+            except httpx.RequestError as error:
+                raise ProviderError(
+                    "Gnani request failed", retryable=True, error_code="network"
+                ) from error
+
+            if response.status_code == 429 and attempt < 4:
+                await asyncio.sleep(2 * (attempt + 1))
+                continue
+            break
+
+        if response is None:
+            raise ProviderError("Gnani request produced no response", retryable=True)
 
         data = _json_response(response)
         if response.status_code in {401, 403}:
