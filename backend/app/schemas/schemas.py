@@ -62,6 +62,8 @@ class ProcessNoteRequest(BaseModel):
 
     note_id: uuid.UUID
     config: TranscriptionConfig
+    recording_name: Optional[str] = Field(None, max_length=255)
+    tags: list[str] = Field(default_factory=list)
 
 
 class AudioUrlResponse(BaseModel):
@@ -71,21 +73,33 @@ class AudioUrlResponse(BaseModel):
     expires_in: int
 
 
+# ── Tags ─────────────────────────────────────────────────────────────────────
+
+class TagResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 # ── Recordings ───────────────────────────────────────────────────────────────
 
 
 class RecordingListItem(BaseModel):
     id: uuid.UUID
     original_filename: str
+    recording_name: Optional[str] = None
     status: str
     summary_status: str
     size_bytes: Optional[int] = None
     duration_seconds: Optional[float] = None
+    resolved_language: Optional[str] = None
     summary_preview: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     failure_stage: Optional[str] = None
     failure_message: Optional[str] = None
+    tags: list[TagResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -106,6 +120,7 @@ class TranscriptSegmentResponse(BaseModel):
 class RecordingDetail(BaseModel):
     id: uuid.UUID
     original_filename: str
+    recording_name: Optional[str] = None
     status: str
     summary_status: str
     transcription_config: Optional[dict] = None
@@ -118,6 +133,7 @@ class RecordingDetail(BaseModel):
     failure_stage: Optional[str] = None
     failure_message: Optional[str] = None
     summary: Optional[str] = None
+    tags: list[TagResponse] = Field(default_factory=list)
     transcript_segments: list[TranscriptSegmentResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

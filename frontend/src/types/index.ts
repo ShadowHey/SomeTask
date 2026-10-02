@@ -11,20 +11,24 @@ export interface TranscriptionConfig {
 export interface RecordingListItem {
   id: string;
   original_filename: string;
+  recording_name?: string | null;
   status: string;
   summary_status: string;
   size_bytes: number | null;
   duration_seconds: number | null;
+  resolved_language?: string | null;
   summary_preview: string | null;
   created_at: string;
   updated_at: string;
   failure_stage: string | null;
   failure_message: string | null;
+  tags?: { id: string; name: string }[];
 }
 
 export interface RecordingDetail {
   id: string;
   original_filename: string;
+  recording_name?: string | null;
   storage_path: string;
   status: string;
   summary_status: string;
@@ -37,6 +41,7 @@ export interface RecordingDetail {
   failure_stage: string | null;
   failure_message: string | null;
   summary: string | null;
+  tags?: { id: string; name: string }[];
   transcript_segments: TranscriptSegment[];
 }
 

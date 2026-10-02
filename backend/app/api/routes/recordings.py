@@ -15,7 +15,7 @@ from app.core.logging import get_logger
 from app.core.supabase import supabase_client
 from app.db.session import get_db
 from app.models.enums import AudioStatus
-from app.models.models import AudioNote
+from app.models.models import AudioNote, Tag
 from app.schemas.schemas import (
     AudioUrlResponse,
     ProcessNoteRequest,
@@ -40,7 +40,9 @@ async def start_processing(
 ) -> AudioNote:
     """Queue an authenticated user's successfully uploaded recording exactly once."""
     result = await db.execute(
-        select(AudioNote).where(AudioNote.id == request.note_id, AudioNote.user_id == user_id)
+        select(AudioNote)
+        .options(selectinload(AudioNote.tags))
+        .where(AudioNote.id == request.note_id, AudioNote.user_id == user_id)
     )
     note = result.scalar_one_or_none()
     if note is None:
@@ -52,6 +54,33 @@ async def start_processing(
 
     note.status = AudioStatus.TRANSCRIPTION_CREATED.value
     note.transcription_config = request.config.model_dump()
+    
+    if request.recording_name:
+        note.recording_name = request.recording_name
+
+    if request.tags:
+        normalized_names = set()
+        for tag_name in request.tags:
+            cleaned = tag_name.strip().lstrip("#").lower()
+            if cleaned:
+                normalized_names.add(cleaned)
+        
+        if normalized_names:
+            existing_tags_result = await db.execute(
+                select(Tag).where(Tag.user_id == user_id, Tag.name.in_(normalized_names))
+            )
+            existing_tags = list(existing_tags_result.scalars().all())
+            existing_names = {t.name for t in existing_tags}
+            
+            new_tags = []
+            for name in normalized_names:
+                if name not in existing_names:
+                    new_tag = Tag(user_id=user_id, name=name)
+                    db.add(new_tag)
+                    new_tags.append(new_tag)
+            
+            note.tags = existing_tags + new_tags
+
     await db.commit()
     try:
         redis = await get_redis_pool()
@@ -82,6 +111,7 @@ async def list_recordings(
             await db.execute(
                 select(AudioNote)
                 .where(AudioNote.user_id == user_id)
+                .options(selectinload(AudioNote.tags))
                 .order_by(AudioNote.created_at.desc())
             )
         )
@@ -92,10 +122,12 @@ async def list_recordings(
         RecordingListItem(
             id=note.id,
             original_filename=note.original_filename,
+            recording_name=note.recording_name,
             status=note.status,
             summary_status=note.summary_status,
             size_bytes=note.size_bytes,
             duration_seconds=note.duration_seconds,
+            resolved_language=note.resolved_language,
             summary_preview=(note.summary[:150] + "…")
             if note.summary and len(note.summary) > 150
             else note.summary,
@@ -103,6 +135,7 @@ async def list_recordings(
             updated_at=note.updated_at,
             failure_stage=note.failure_stage,
             failure_message=note.failure_message,
+            tags=[{"id": str(t.id), "name": t.name} for t in note.tags],
         )
         for note in notes
     ]
@@ -116,7 +149,7 @@ async def _get_owned_note(
     include_segments: bool = False,
     include_jobs: bool = False,
 ) -> AudioNote:
-    options = []
+    options = [selectinload(AudioNote.tags)]
     if include_segments:
         options.append(selectinload(AudioNote.transcript_segments))
     if include_jobs:
@@ -126,6 +159,7 @@ async def _get_owned_note(
             select(AudioNote)
             .where(AudioNote.id == note_id, AudioNote.user_id == user_id)
             .options(*options)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if note is None:

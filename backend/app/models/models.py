@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,6 +51,7 @@ class AudioNote(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
     original_filename: Mapped[str] = mapped_column(Text, nullable=False)
+    recording_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
 
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="created")
@@ -83,6 +85,9 @@ class AudioNote(Base):
     )
     processing_jobs: Mapped[list[ProcessingJob]] = relationship(
         back_populates="note", cascade="all, delete-orphan"
+    )
+    tags: Mapped[list[Tag]] = relationship(
+        secondary="audio_note_tags", back_populates="recordings"
     )
 
 
@@ -142,3 +147,29 @@ class ProcessingJob(Base):
 
     # Relationships
     note: Mapped[AudioNote] = relationship(back_populates="processing_jobs")
+
+audio_note_tags = sa.Table(
+    "audio_note_tags",
+    Base.metadata,
+    sa.Column("recording_id", UUID(as_uuid=True), ForeignKey("audio_notes.id", ondelete="CASCADE"), primary_key=True),
+    sa.Column("tag_id", UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "name", name="uix_user_tag_name"),
+    )
+
+    recordings: Mapped[list[AudioNote]] = relationship(
+        secondary=audio_note_tags, back_populates="tags"
+    )

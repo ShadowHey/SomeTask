@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { api } from "@/lib/api";
 import { uploadAudioFile, UploadProgress } from "@/lib/upload";
 import { TranscriptionConfig } from "@/types";
 
@@ -25,6 +26,19 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  const [recordingName, setRecordingName] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [availableTags, setAvailableTags] = useState<{id: string, name: string}[]>([]);
+  const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      api.tags.list().then(setAvailableTags).catch(console.error);
+    }
+  }, [isOpen]);
+
   const [lang1, setLang1] = useState("hi-IN");
   const [lang2, setLang2] = useState("");
   const [lang3, setLang3] = useState("");
@@ -60,7 +74,7 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
 
     try {
       setError(null);
-      await uploadAudioFile(file, finalConfig, (progress) => {
+      await uploadAudioFile(file, finalConfig, recordingName, tags, (progress) => {
         setUploadProgress(progress);
       });
       onUploadSuccess();
@@ -68,6 +82,9 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
         onClose();
         setUploadProgress(null);
         setFile(null);
+        setRecordingName("");
+        setTags([]);
+        setTagInput("");
         setLang1("hi-IN");
         setLang2("");
         setLang3("");
@@ -100,6 +117,93 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                   className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                   accept=".wav,.mp3,.ogg,.flac,.aac,.m4a"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Recording Name</label>
+                <input
+                  type="text"
+                  value={recordingName}
+                  onChange={(e) => setRecordingName(e.target.value)}
+                  placeholder="Enter a name for this recording"
+                  className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Tags</label>
+                <div className="mt-1 flex flex-wrap gap-2 items-center p-2 border border-gray-300 rounded-md bg-white focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+                  {tags.map((tag) => (
+                    <span key={tag} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                      #{tag}
+                      <button type="button" onClick={() => setTags(tags.filter(t => t !== tag))} className="text-gray-400 hover:text-gray-600">×</button>
+                    </span>
+                  ))}
+                  <div className="relative flex-1 min-w-[120px]">
+                    <input
+                      ref={tagInputRef}
+                      type="text"
+                      value={tagInput}
+                      onChange={(e) => {
+                        setTagInput(e.target.value);
+                        setIsTagDropdownOpen(true);
+                      }}
+                      onFocus={() => setIsTagDropdownOpen(true)}
+                      onBlur={() => setTimeout(() => setIsTagDropdownOpen(false), 200)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const cleaned = tagInput.trim().replace(/^#+/, "").toLowerCase();
+                          if (cleaned && !tags.includes(cleaned)) {
+                            setTags([...tags, cleaned]);
+                          }
+                          setTagInput("");
+                          setIsTagDropdownOpen(false);
+                        } else if (e.key === "Backspace" && !tagInput && tags.length > 0) {
+                          setTags(tags.slice(0, -1));
+                        }
+                      }}
+                      placeholder={tags.length === 0 ? "Add tags..." : ""}
+                      className="w-full bg-transparent border-0 p-0 text-sm focus:ring-0 text-gray-900 placeholder:text-gray-400"
+                    />
+                    {isTagDropdownOpen && tagInput && (
+                      <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
+                        {availableTags
+                          .filter(t => t.name.toLowerCase().includes(tagInput.replace(/^#+/, "").toLowerCase()) && !tags.includes(t.name))
+                          .map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => {
+                                setTags([...tags, t.name]);
+                                setTagInput("");
+                                setIsTagDropdownOpen(false);
+                                tagInputRef.current?.focus();
+                              }}
+                              className="relative cursor-pointer select-none py-2 pl-3 pr-9 text-gray-900 hover:bg-blue-50"
+                            >
+                              #{t.name}
+                            </div>
+                          ))}
+                        {!availableTags.some(t => t.name.toLowerCase() === tagInput.replace(/^#+/, "").toLowerCase()) && (
+                          <div
+                            onClick={() => {
+                              const cleaned = tagInput.trim().replace(/^#+/, "").toLowerCase();
+                              if (cleaned && !tags.includes(cleaned)) {
+                                setTags([...tags, cleaned]);
+                              }
+                              setTagInput("");
+                              setIsTagDropdownOpen(false);
+                              tagInputRef.current?.focus();
+                            }}
+                            className="relative cursor-pointer select-none py-2 pl-3 pr-9 text-blue-600 hover:bg-blue-50 font-medium"
+                          >
+                            Create #{tagInput.trim().replace(/^#+/, "").toLowerCase()}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Language Identification Section */}

@@ -22,6 +22,8 @@ const ALLOWED_MIME_TYPES = [
 export async function uploadAudioFile(
   file: File,
   config: any,
+  recordingName: string,
+  tags: string[],
   onProgress?: (progress: UploadProgress) => void
 ): Promise<void> {
   // Validate file
@@ -45,8 +47,7 @@ export async function uploadAudioFile(
     const fileExtension = file.name.split('.').pop();
     const storagePath = `users/${user.id}/${noteId}.${fileExtension}`;
 
-    // 2. Insert into DB (so FastAPI can pick it up via Postgres triggers or direct API call)
-    // Actually, we'll create the DB record via Supabase client to leverage RLS directly!
+    // 2. Insert into DB
     onProgress?.({ status: "uploading", progress: 10, message: "Creating record..." });
 
     const { error: dbError } = await supabase
@@ -55,6 +56,7 @@ export async function uploadAudioFile(
         id: noteId,
         user_id: user.id,
         original_filename: file.name,
+        recording_name: recordingName || null,
         storage_path: storagePath,
         size_bytes: file.size,
         status: 'uploading'
@@ -89,7 +91,7 @@ export async function uploadAudioFile(
     }
 
     // 5. Tell FastAPI to start the background job
-    await api.recordings.process(noteId, config);
+    await api.recordings.process(noteId, config, recordingName, tags);
 
     onProgress?.({ status: "success", progress: 100, message: "Upload complete!" });
   } catch (error) {
