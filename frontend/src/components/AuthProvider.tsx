@@ -63,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (newSession) {
           setApiToken(newSession.access_token);
           if (pathname === "/login" || pathname === "/register" || pathname === "/") {
-            router.push("/dashboard");
+            router.push("/home");
           }
         } else {
           setApiToken(null);

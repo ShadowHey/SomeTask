@@ -1,20 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { uploadAudioFile, UploadProgress } from "@/lib/upload";
-import { UploadModal } from "@/components/upload/UploadModal";
 import type { RecordingListItem } from "@/types";
 import { useAuth } from "@/components/AuthProvider";
 
-export default function Dashboard() {
+export default function Transcripts() {
   const { isLoading: isAuthLoading } = useAuth();
   const [recordings, setRecordings] = useState<RecordingListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
   const fetchRecordings = useCallback(async () => {
     try {
@@ -55,30 +51,11 @@ export default function Dashboard() {
 
   return (
     <div className="px-4 sm:px-0">
-      <div className="sm:flex sm:items-center sm:justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight">
-            Your Audio Notes
-          </h1>
-          <p className="mt-2 text-sm text-gray-500">
-            Upload new audio to get it transcribed and summarized.
-          </p>
-        </div>
-        <div className="mt-4 sm:ml-4 sm:mt-0">
-          <button
-            onClick={() => setIsUploadModalOpen(true)}
-            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-          >
-            Upload Audio
-          </button>
-        </div>
+      <div className="mb-8 border-b border-gray-200 pb-5">
+        <h1 className="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight uppercase tracking-wider">
+          All Transcripts
+        </h1>
       </div>
-
-      <UploadModal 
-        isOpen={isUploadModalOpen} 
-        onClose={() => setIsUploadModalOpen(false)} 
-        onUploadSuccess={() => fetchRecordings()} 
-      />
 
       {error && (
         <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
@@ -91,12 +68,20 @@ export default function Dashboard() {
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
         </div>
       ) : recordings.length === 0 ? (
-        <div className="text-center rounded-lg border-2 border-dashed border-gray-300 p-12">
+        <div className="text-center rounded-lg border-2 border-dashed border-gray-300 p-12 bg-white">
           <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          <h3 className="mt-2 text-sm font-semibold text-gray-900">No recordings</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by uploading an audio file.</p>
+          <h3 className="mt-2 text-sm font-semibold text-gray-900">No transcripts found</h3>
+          <p className="mt-1 text-sm text-gray-500">Go to Home to upload an audio file.</p>
+          <div className="mt-6">
+            <Link
+              href="/home"
+              className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+            >
+              Upload Audio
+            </Link>
+          </div>
         </div>
       ) : (
         <ul role="list" className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -105,13 +90,14 @@ export default function Dashboard() {
               <Link href={`/recordings/${recording.id}`} className="block h-full">
                 <div className="flex w-full items-center justify-between space-x-6 p-6">
                   <div className="flex-1 truncate">
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-3 mb-2">
                       <h3 className="truncate text-sm font-medium text-gray-900">{recording.original_filename}</h3>
-                      <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusColor(recording.status)}`}>
+                    </div>
+                    <div className="mb-4">
+                      <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium border border-current ${getStatusColor(recording.status)}`}>
                         {recording.status.replace(/_/g, ' ').toUpperCase()}
                       </span>
                     </div>
-                    <p className="mt-1 truncate text-xs text-gray-500">{recording.original_filename}</p>
                     
                     {recording.summary_preview ? (
                       <p className="mt-4 text-sm text-gray-600 line-clamp-3">
@@ -122,7 +108,7 @@ export default function Dashboard() {
                         {recording.failure_message}
                       </p>
                     ) : (
-                      <div className="mt-4 h-12 rounded bg-gray-50 flex items-center justify-center text-xs text-gray-400">
+                      <div className="mt-4 h-12 rounded bg-gray-50 flex items-center justify-center text-xs text-gray-500">
                         {recording.summary_status === "completed" 
                           ? "Summary available." 
                           : recording.summary_status === "queued" || recording.summary_status === "processing"

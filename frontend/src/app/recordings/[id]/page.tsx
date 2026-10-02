@@ -106,7 +106,7 @@ export default function RecordingDetailPage({
     
     try {
       await api.recordings.delete(id);
-      router.push("/dashboard");
+      router.push("/transcripts");
     } catch (err) {
       console.error("Delete failed", err);
       alert("Failed to delete recording");
@@ -152,8 +152,8 @@ export default function RecordingDetailPage({
         <div className="mx-auto max-w-3xl rounded-lg bg-white p-8 shadow text-center">
           <h2 className="text-xl font-semibold text-red-600">Error</h2>
           <p className="mt-2 text-gray-600">{error || "Recording not found"}</p>
-          <Link href="/dashboard" className="mt-4 inline-block text-blue-600 hover:underline">
-            Back to Dashboard
+          <Link href="/transcripts" className="mt-4 inline-block text-blue-600 hover:underline">
+            Back to Transcripts
           </Link>
         </div>
       </div>
@@ -166,7 +166,7 @@ export default function RecordingDetailPage({
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 justify-between items-center">
             <div className="flex items-center space-x-4">
-              <Link href="/dashboard" className="text-gray-500 hover:text-gray-900">
+              <Link href="/transcripts" className="text-gray-500 hover:text-gray-900">
                 &larr; Back
               </Link>
               <div className="h-4 w-px bg-gray-300"></div>
