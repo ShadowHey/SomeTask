@@ -275,22 +275,11 @@ export default function RecordingDetailPage({
 
             {/* AI Summary Section */}
             <section className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 p-6 shadow-sm ring-1 ring-blue-100">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <svg className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <h2 className="text-lg font-semibold text-gray-900">AI Summary</h2>
-                </div>
-                {recording.status === "transcription_completed" && recording.summary_status !== "completed" && recording.summary_status !== "processing" && recording.summary_status !== "queued" && (
-                  <button
-                    onClick={handleGenerateSummary}
-                    disabled={isGeneratingSummary}
-                    className="text-sm bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {isGeneratingSummary ? "Requesting..." : "Request an AI Summary"}
-                  </button>
-                )}
+              <div className="flex items-center space-x-2 mb-4">
+                <svg className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <h2 className="text-lg font-semibold text-gray-900">AI Summary</h2>
               </div>
               
               {recording.summary ? (
@@ -299,23 +288,47 @@ export default function RecordingDetailPage({
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center p-8 bg-white/50 rounded-lg border border-blue-100 border-dashed">
-                  <p className="text-sm text-gray-500 italic text-center">
-                    {recording.summary_status === "failed" 
-                      ? "Summary generation failed. You can try again later." 
-                      : recording.summary_status === "queued" || recording.summary_status === "processing" 
-                      ? "Generating smart summary... This will just take a moment." 
-                      : recording.status !== "transcription_completed" 
-                      ? "Transcript must be completed first before requesting a summary." 
-                      : "No summary generated yet. Click the button above to request one."}
-                  </p>
-                  {recording.status === "transcription_completed" && recording.summary_status !== "completed" && recording.summary_status !== "processing" && recording.summary_status !== "queued" && (
-                    <button
-                      onClick={handleGenerateSummary}
-                      disabled={isGeneratingSummary}
-                      className="mt-4 text-sm bg-blue-600 text-white px-6 py-2 rounded-full hover:bg-blue-700 shadow-sm transition-colors disabled:opacity-50"
-                    >
-                      {isGeneratingSummary ? "Requesting..." : "Request an AI Summary"}
-                    </button>
+                  {recording.summary_status === "queued" || recording.summary_status === "processing" ? (
+                    <div className="flex flex-col items-center space-y-3">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
+                      <p className="text-sm font-medium text-blue-700">
+                        Generating smart summary with Gemini Flash... This will just take a moment.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-500 italic text-center">
+                        {recording.summary_status === "failed" 
+                          ? "Summary generation failed. You can try again below." 
+                          : recording.status !== "transcription_completed" && recording.status !== "completed"
+                          ? "Transcript must be completed first before requesting a summary." 
+                          : "No summary generated yet. Click the button below to request an AI summary."}
+                      </p>
+                      {(recording.status === "transcription_completed" || recording.status === "completed") &&
+                        recording.summary_status !== "completed" &&
+                        recording.summary_status !== "processing" &&
+                        recording.summary_status !== "queued" && (
+                        <button
+                          onClick={handleGenerateSummary}
+                          disabled={isGeneratingSummary}
+                          className="mt-4 inline-flex items-center gap-2 text-sm font-medium bg-blue-600 text-white px-6 py-2.5 rounded-full hover:bg-blue-700 shadow-sm transition-all disabled:opacity-50 hover:shadow"
+                        >
+                          {isGeneratingSummary ? (
+                            <>
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                              <span>Requesting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                              </svg>
+                              <span>Request an AI Summary</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               )}
