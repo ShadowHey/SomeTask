@@ -27,8 +27,11 @@ export default function Home() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-white to-gray-100 px-4 text-center">
       <div className="w-full max-w-3xl space-y-8">
         <div className="space-y-4">
-          <h1 className="text-5xl font-extrabold tracking-tight text-gray-900 sm:text-6xl">
-            Audio Notes Platform
+          <h1 className="flex items-center justify-center gap-4 text-5xl font-extrabold tracking-tight text-gray-900 sm:text-6xl font-[family-name:var(--font-jakarta)]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-12 h-12 text-blue-600">
+              <path d="M2 13v2a2 2 0 0 0 4 0V5a2 2 0 0 1 4 0v14a2 2 0 0 0 4 0V5a2 2 0 0 1 4 0v10a2 2 0 0 0 4 0v-2" />
+            </svg>
+            VOICY
           </h1>
           <p className="mx-auto max-w-2xl text-xl text-gray-500">
             Upload your meetings, lectures, and voice memos. Get high-quality transcriptions and intelligent summaries instantly.

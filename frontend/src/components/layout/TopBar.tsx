@@ -12,8 +12,11 @@ export function TopBar() {
         <div className="flex h-16 justify-between items-center">
           <div className="flex">
             <div className="flex flex-shrink-0 items-center">
-              <Link href="/home" className="text-xl font-bold text-blue-600">
-                Audio Notes
+              <Link href="/home" className="flex items-center gap-2 text-xl font-bold text-blue-600 font-[family-name:var(--font-jakarta)] tracking-tight">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+                  <path d="M2 13v2a2 2 0 0 0 4 0V5a2 2 0 0 1 4 0v14a2 2 0 0 0 4 0V5a2 2 0 0 1 4 0v10a2 2 0 0 0 4 0v-2" />
+                </svg>
+                VOICY
               </Link>
             </div>
           </div>
