@@ -10,17 +10,34 @@ interface UploadModalProps {
   onUploadSuccess: () => void;
 }
 
+const SUPPORTED_LANGUAGES = [
+  { code: "hi-IN", name: "Hindi" },
+  { code: "en-IN", name: "English (India)" },
+  { code: "bn-IN", name: "Bengali (India)" },
+  { code: "kn-IN", name: "Kannada" },
+  { code: "ml-IN", name: "Malayalam" },
+  { code: "mr-IN", name: "Marathi" },
+  { code: "ta-IN", name: "Tamil" },
+  { code: "te-IN", name: "Telugu" },
+];
+
 export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  const [lang1, setLang1] = useState("hi-IN");
+  const [lang2, setLang2] = useState("");
+  const [lang3, setLang3] = useState("");
+
   const [config, setConfig] = useState<TranscriptionConfig>({
-    language_code: "hi-IN,en-IN",
+    language_code: "hi-IN",
     with_diarization: false,
     num_speakers: 2,
     is_multi_channel: false,
     with_denoise: false,
   });
+
+  const selectedCodes = [lang1, lang2, lang3].filter(Boolean);
 
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,9 +53,14 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
   const handleUpload = async () => {
     if (!file) return;
 
+    const finalConfig: TranscriptionConfig = {
+      ...config,
+      language_code: selectedCodes.join(","),
+    };
+
     try {
       setError(null);
-      await uploadAudioFile(file, config, (progress) => {
+      await uploadAudioFile(file, finalConfig, (progress) => {
         setUploadProgress(progress);
       });
       onUploadSuccess();
@@ -46,6 +68,9 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
         onClose();
         setUploadProgress(null);
         setFile(null);
+        setLang1("hi-IN");
+        setLang2("");
+        setLang3("");
         if (fileInputRef.current) fileInputRef.current.value = "";
       }, 1500);
     } catch (err) {
@@ -77,22 +102,89 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Language Code</label>
-                <select
-                  value={config.language_code}
-                  onChange={(e) => setConfig({ ...config, language_code: e.target.value })}
-                  className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                >
-                  <option value="en-IN">English (India)</option>
-                  <option value="hi-IN">Hindi (India)</option>
-                  <option value="hi-IN,en-IN">Hinglish (Hindi + English)</option>
-                  <option value="ta-IN">Tamil (India)</option>
-                  <option value="te-IN">Telugu (India)</option>
-                  <option value="kn-IN">Kannada (India)</option>
-                  <option value="mr-IN">Marathi (India)</option>
-                  <option value="bn-IN">Bengali (India)</option>
-                </select>
+              {/* Language Identification Section */}
+              <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/70 p-3.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-900">
+                    Language Identification
+                  </label>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                    {selectedCodes.length === 1 ? "1 language (Single)" : `${selectedCodes.length} candidate languages`}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Select up to 3 candidate languages. The 1st language acts as the fallback if identification confidence is low.
+                </p>
+
+                <div className="space-y-2">
+                  {/* Primary Language */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      1. Primary / Fallback Language <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={lang1}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setLang1(val);
+                        if (lang2 === val) { setLang2(""); setLang3(""); }
+                        else if (lang3 === val) { setLang3(""); }
+                      }}
+                      className="block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      {SUPPORTED_LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Secondary Language */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      2. Second Candidate Language (Optional)
+                    </label>
+                    <select
+                      value={lang2}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setLang2(val);
+                        if (!val || lang3 === val) { setLang3(""); }
+                      }}
+                      className="block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">-- None (Only 1 language) --</option>
+                      {SUPPORTED_LANGUAGES.filter((l) => l.code !== lang1).map((l) => (
+                        <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Tertiary Language */}
+                  {lang2 && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        3. Third Candidate Language (Optional)
+                      </label>
+                      <select
+                        value={lang3}
+                        onChange={(e) => setLang3(e.target.value)}
+                        className="block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">-- None --</option>
+                        {SUPPORTED_LANGUAGES.filter((l) => l.code !== lang1 && l.code !== lang2).map((l) => (
+                          <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1 border-t border-gray-200 text-xs text-gray-600">
+                  <span className="font-medium text-gray-700">API payload code:</span>
+                  <code className="bg-white px-2 py-0.5 rounded border border-gray-200 font-mono text-blue-600 font-medium">
+                    "{selectedCodes.join(",")}"
+                  </code>
+                </div>
               </div>
 
               <div className="flex items-center">

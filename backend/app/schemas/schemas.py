@@ -4,19 +4,42 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+SUPPORTED_BATCH_LANGUAGES = {
+    "bn-IN", "en-IN", "hi-IN", "kn-IN", "ml-IN", "mr-IN", "ta-IN", "te-IN"
+}
 
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
 class TranscriptionConfig(BaseModel):
-    language_code: str = Field(default="en-IN", description="E.g., en-IN or hi-IN,en-IN")
+    language_code: str = Field(default="en-IN", description="E.g., en-IN or hi-IN,en-IN (up to 3 codes)")
     with_diarization: bool = False
     num_speakers: Optional[int] = Field(None, ge=1, le=2)
     is_multi_channel: bool = False
     with_denoise: bool = False
     bias_list: Optional[list[str]] = Field(None, max_length=100)
     bias_score: Optional[float] = Field(None)
+
+    @field_validator("language_code")
+    @classmethod
+    def validate_language_code(cls, v: str) -> str:
+        codes = [code.strip() for code in v.split(",") if code.strip()]
+        if not codes:
+            raise ValueError("At least one language code must be provided.")
+        if len(codes) > 3:
+            raise ValueError("Maximum of 3 language codes supported for language identification.")
+        seen = set()
+        for code in codes:
+            if code not in SUPPORTED_BATCH_LANGUAGES:
+                raise ValueError(
+                    f"Unsupported language code '{code}'. Supported languages: {', '.join(sorted(SUPPORTED_BATCH_LANGUAGES))}"
+                )
+            if code in seen:
+                raise ValueError(f"Duplicate language code '{code}' provided.")
+            seen.add(code)
+        return ",".join(codes)
 
 class ProcessNoteRequest(BaseModel):
     """Payload sent by the frontend after it successfully uploads a file to Supabase Storage."""
