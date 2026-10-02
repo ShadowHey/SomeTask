@@ -17,18 +17,17 @@ async def test_batch_provider_uses_create_start_poll_files_download_flow() -> No
             return httpx.Response(201, json={"job_id": "job-123", "status": "CREATED"})
         if route.endswith("/start"):
             return httpx.Response(202, json={"status": "STARTING"})
-        if route.endswith("/job-123"):
-            return httpx.Response(200, json={"status": "COMPLETED"})
         if route.endswith("/files"):
             return httpx.Response(
-                200, json={"files": [{"transcript_url": "https://transcripts.test/a"}]}
+                200, json={"data": [{"transcript_url": "https://transcripts.test/a"}]}
             )
+        if route.endswith("/job-123"):
+            return httpx.Response(200, json={"status": "COMPLETED"})
         if request.url.host == "transcripts.test":
             return httpx.Response(200, json={"full_transcript": "hello", "segments": []})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-
     provider = GnaniTranscriptionProvider(transport=httpx.MockTransport(handler))
-    job_id = await provider.create_job("https://storage.test/audio.mp3", "hi-IN,en-IN")
+    job_id = await provider.create_job("https://storage.test/audio.mp3", {"language_code": "hi-IN,en-IN"})
     await provider.start_job(job_id)
     assert (await provider.poll_status(job_id))["status"] == "COMPLETED"
     assert (await provider.get_files(job_id))[0]["transcript_url"] == "https://transcripts.test/a"

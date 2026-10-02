@@ -192,28 +192,35 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                   id="diarization"
                   type="checkbox"
                   checked={config.with_diarization}
-                  onChange={(e) => setConfig({ ...config, with_diarization: e.target.checked })}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setConfig({ 
+                      ...config, 
+                      with_diarization: checked,
+                      num_speakers: checked ? 2 : undefined
+                    });
+                  }}
                   className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                 />
-                <label htmlFor="diarization" className="block ml-2 text-sm text-gray-900">
-                  Enable Speaker Diarization
+                <label htmlFor="diarization" className="ml-2 text-sm text-gray-900 flex items-center gap-1.5 cursor-pointer select-none">
+                  <span>Enable Speaker Diarization</span>
                 </label>
-              </div>
-
-              {config.with_diarization && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Number of Speakers</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={2}
-                    value={config.num_speakers || 2}
-                    onChange={(e) => setConfig({ ...config, num_speakers: parseInt(e.target.value) })}
-                    className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white text-gray-900 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">Maximum 2 speakers supported.</p>
+                <div className="relative flex items-center group ml-1.5">
+                  <button
+                    type="button"
+                    aria-label="Speaker Diarization info"
+                    className="text-gray-400 hover:text-gray-600 focus:outline-none flex items-center justify-center cursor-help"
+                  >
+                    <span className="text-sm font-medium">ⓘ</span>
+                  </button>
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block group-focus-within:block w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-xl z-50 pointer-events-none transition-all">
+                    <p className="leading-relaxed">
+                      Speaker Diarization separates distinct speakers in the transcript when two people are speaking. Currently, the API supports transcription for up to <strong>2 speakers</strong>.
+                    </p>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
+                  </div>
                 </div>
-              )}
+              </div>
 
               <div className="flex items-center">
                 <input
@@ -223,9 +230,24 @@ export function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalPro
                   onChange={(e) => setConfig({ ...config, with_denoise: e.target.checked })}
                   className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                 />
-                <label htmlFor="denoise" className="block ml-2 text-sm text-gray-900">
-                  Enable Noise Reduction
+                <label htmlFor="denoise" className="ml-2 text-sm text-gray-900 flex items-center gap-1.5 cursor-pointer select-none">
+                  <span>Enable Noise Reduction</span>
                 </label>
+                <div className="relative flex items-center group ml-1.5">
+                  <button
+                    type="button"
+                    aria-label="Noise Reduction info"
+                    className="text-gray-400 hover:text-gray-600 focus:outline-none flex items-center justify-center cursor-help"
+                  >
+                    <span className="text-sm font-medium">ⓘ</span>
+                  </button>
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block group-focus-within:block w-72 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-xl z-50 pointer-events-none transition-all">
+                    <p className="leading-relaxed">
+                      Removes background noise before transcription and diarization. Recommended for noisy audio. Adds ~25% processing time, but billing remains based only on the audio duration, so denoising does not add any extra usage charges. Output format remains unchanged.
+                    </p>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
