@@ -6,11 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import get_db, get_current_user_id
+from app.api.dependencies import get_current_user_id
+from app.db.session import get_db
 from app.models.models import Profile
 from app.schemas.schemas import ProfileResponse, ProfileUpdateRequest
 
-router = APIRouter(prefix="/profile", tags=["profile"])
+router = APIRouter(tags=["profile"])
 
 @router.get("", response_model=ProfileResponse)
 async def get_profile(

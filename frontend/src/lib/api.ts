@@ -27,6 +27,7 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
   }
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
+    cache: "no-store",
     ...options,
     headers,
   });
@@ -47,10 +48,10 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 export const api = {
   recordings: {
     // Called after direct Supabase Storage upload to enqueue the processing job
-    process: (note_id: string, config: any) =>
+    process: (note_id: string, config: any, recording_name?: string, tags?: string[]) =>
       fetchApi<RecordingDetail>("/recordings", {
         method: "POST",
-        body: JSON.stringify({ note_id, config }),
+        body: JSON.stringify({ note_id, config, recording_name, tags }),
       }),
     list: () =>
       fetchApi<RecordingListItem[]>("/recordings"),
@@ -79,5 +80,20 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(data),
       }),
+  },
+  tags: {
+    list: () => fetchApi<any[]>("/tags"),
+  },
+  usage: {
+    get: (params?: { start_date?: string; end_date?: string }) => {
+      let query = "";
+      if (params) {
+        const urlParams = new URLSearchParams();
+        if (params.start_date) urlParams.append("start_date", params.start_date);
+        if (params.end_date) urlParams.append("end_date", params.end_date);
+        query = `?${urlParams.toString()}`;
+      }
+      return fetchApi<any>(`/usage${query}`);
+    }
   },
 };

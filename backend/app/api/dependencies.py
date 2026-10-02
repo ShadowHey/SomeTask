@@ -10,7 +10,7 @@ from app.core.supabase import supabase_client
 security = HTTPBearer()
 
 
-async def get_current_user_id(
+def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> uuid.UUID:
     """
