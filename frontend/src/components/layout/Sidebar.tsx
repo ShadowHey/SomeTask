@@ -77,7 +77,7 @@ export function Sidebar() {
 
   return (
     <aside 
-      className={`relative bg-[#0d1629] text-gray-300 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-800 ${
+      className={`relative bg-[#0d1629] text-gray-300 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-800 z-50 ${
         isExpanded ? "w-60" : "w-[72px]"
       } min-h-[calc(100vh-4rem)]`}
     >
@@ -95,7 +95,7 @@ export function Sidebar() {
         </svg>
       </button>
 
-      <div className="flex-1 py-6 px-3 flex flex-col gap-2 overflow-y-auto">
+      <div className="flex-1 py-6 px-3 flex flex-col gap-2">
         {navItems.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
