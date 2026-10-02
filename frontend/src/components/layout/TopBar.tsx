@@ -23,8 +23,26 @@ export function TopBar() {
               </Link>
             </div>
           </div>
+          
+          {/* Global Search Bar (Visual Only) */}
+          <div className="hidden flex-1 sm:flex justify-center max-w-lg w-full mx-8">
+            <div className="relative w-full max-w-md">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                placeholder="Search..."
+                className="block w-full rounded-md border-0 py-1.5 pl-9 pr-3 text-gray-900 ring-1 ring-inset ring-gray-200 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 bg-gray-50 hover:bg-white transition-colors"
+                readOnly
+              />
+            </div>
+          </div>
+
           <div className="flex items-center space-x-4">
-            {profile && (
+            {user && (
               <div className="relative">
                 <button
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
@@ -85,7 +103,7 @@ export function TopBar() {
                 )}
               </div>
             )}
-            {!profile && (
+            {!user && (
               <button
                 onClick={logout}
                 className="rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"

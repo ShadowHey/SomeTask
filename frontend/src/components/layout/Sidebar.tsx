@@ -77,9 +77,9 @@ export function Sidebar() {
 
   return (
     <aside 
-      className={`relative bg-[#0d1629] text-gray-300 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-800 z-50 ${
+      className={`relative bg-[#0d1629] text-gray-300 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-800 z-50 h-full ${
         isExpanded ? "w-60" : "w-[72px]"
-      } min-h-[calc(100vh-4rem)]`}
+      }`}
     >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
