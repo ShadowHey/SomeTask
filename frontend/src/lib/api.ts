@@ -72,4 +72,12 @@ export const api = {
     searchTranscript: (id: string, query: string) =>
       fetchApi<TranscriptSearchResponse>(`/recordings/${id}/search?q=${encodeURIComponent(query)}`),
   },
+  profile: {
+    get: () => fetchApi<any>("/profile"),
+    update: (data: { username?: string; avatar_id?: string }) => 
+      fetchApi<any>("/profile", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+  },
 };

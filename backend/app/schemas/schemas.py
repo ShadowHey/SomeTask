@@ -10,6 +10,22 @@ SUPPORTED_BATCH_LANGUAGES = {
     "bn-IN", "en-IN", "hi-IN", "kn-IN", "ml-IN", "mr-IN", "ta-IN", "te-IN"
 }
 
+# ── Profile ────────────────────────────────────────────────────────────────────
+
+class ProfileResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    username: Optional[str] = None
+    avatar_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+class ProfileUpdateRequest(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=30)
+    avatar_id: Optional[str] = None
+
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
