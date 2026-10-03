@@ -293,6 +293,7 @@ export default function Transcripts() {
         doc.save(`VOICY_Transcript_Export_${dateStrForFile}_${cleanRecName}_${cleanAudioName}.pdf`);
       }
 
+      setSelectedTranscriptIds(new Set());
       setIsExportModalOpen(false);
     } catch (err) {
       console.error(err);
@@ -648,7 +649,10 @@ export default function Transcripts() {
                 <button
                   type="button"
                   disabled={isExporting}
-                  onClick={() => setIsExportModalOpen(false)}
+                  onClick={() => {
+                    setIsExportModalOpen(false);
+                    setSelectedTranscriptIds(new Set());
+                  }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
                 >
                   Cancel
