@@ -35,7 +35,179 @@ export default function ArchitecturePage() {
             </div>
           </section>
 
-          {/* 2. END-TO-END PROCESSING FLOW */}
+          {/* ARCHITECTURE MAP */}
+          <section id="architecture-map" className="scroll-mt-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-emerald-100 rounded-lg">
+                <svg className="w-6 h-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" /></svg>
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">Technical Architecture Map</h2>
+            </div>
+            
+            <div className="w-full bg-slate-50 border border-gray-200 rounded-2xl p-8 overflow-x-auto shadow-sm mb-16">
+              <div className="min-w-[800px] flex flex-col items-center font-mono text-sm relative z-10 py-4">
+                
+                {/* USER */}
+                <div className="flex flex-col items-center">
+                  <div className="border-2 border-slate-800 bg-white px-6 py-2 shadow-[4px_4px_0px_#1e293b] font-bold text-lg rounded-lg">
+                    👤 USER
+                  </div>
+                  <div className="h-10 border-l-2 border-slate-800 relative">
+                    <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                    <div className="absolute top-2 ml-3 bg-slate-50 px-2 text-xs text-slate-600 whitespace-nowrap font-sans">Uploads Audio</div>
+                  </div>
+                </div>
+
+                {/* FRONTEND */}
+                <div className="flex flex-col items-center relative w-full mt-1">
+                  <div className="w-80 border-2 border-slate-800 bg-blue-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center z-10 relative">
+                    <div className="font-bold text-blue-900 text-base">VOICY FRONTEND</div>
+                    <div className="text-xs text-blue-700 mt-1">frontend/src/app/...</div>
+                    <div className="text-xs text-slate-600 mt-3 border-t border-blue-200 pt-2 flex justify-between font-sans">
+                      <span>Request/Response</span>
+                      <span>Polling UI</span>
+                    </div>
+                  </div>
+                  
+                  {/* Auth Connect */}
+                  <div className="absolute left-1/2 -ml-[280px] top-4 flex items-center">
+                    <div className="border-2 border-slate-800 bg-white p-3 rounded-lg shadow-[4px_4px_0px_#1e293b] text-center w-32">
+                      <div className="font-bold text-xs text-slate-800">Authentication</div>
+                      <div className="text-[10px] text-slate-500 font-sans">Supabase Auth</div>
+                    </div>
+                    <div className="w-16 border-t-2 border-slate-800 border-dashed relative">
+                      <div className="absolute -right-1 -top-[5px] w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-l-[6px] border-l-slate-800"></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Split from Frontend to Storage & API */}
+                <div className="flex w-full max-w-3xl justify-center gap-24 relative mt-1">
+                  {/* Storage Path */}
+                  <div className="flex flex-col items-center w-48">
+                    <div className="h-12 border-l-2 border-slate-800 border-dashed relative">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                      <div className="absolute top-2 -ml-28 bg-slate-50 px-2 text-[10px] text-slate-500 whitespace-nowrap text-right w-24 font-sans">Direct Binary<br/>Upload</div>
+                    </div>
+                    <div className="w-40 h-40 border-2 border-slate-800 bg-purple-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-full text-center flex flex-col justify-center items-center relative z-10">
+                      <div className="font-bold text-purple-900 text-sm">STORAGE</div>
+                      <div className="text-[10px] text-purple-700 mt-1 font-sans">Supabase Buckets</div>
+                      <div className="text-[9px] text-red-600 mt-3 font-bold bg-white px-2 py-1 rounded border border-red-200 font-sans">Fail ➔ UI Error</div>
+                    </div>
+                  </div>
+
+                  {/* API Path */}
+                  <div className="flex flex-col items-center w-64">
+                    <div className="h-12 border-l-2 border-slate-800 relative">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                      <div className="absolute top-2 ml-3 bg-slate-50 px-2 text-[10px] text-slate-500 whitespace-nowrap font-sans">POST /process</div>
+                    </div>
+                    <div className="w-full border-2 border-slate-800 bg-emerald-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center relative z-10">
+                      <div className="font-bold text-emerald-900 text-sm">BACKEND API</div>
+                      <div className="text-[10px] text-emerald-700 mt-1">backend/app/api/...</div>
+                      
+                      {/* Database connection from API */}
+                      <div className="absolute top-1/2 -right-[150px] -mt-[12px] flex items-center">
+                        <div className="w-12 border-t-2 border-slate-800 relative">
+                          <div className="absolute -right-1 -top-[5px] w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-l-[6px] border-l-slate-800"></div>
+                        </div>
+                        <div className="border-2 border-slate-800 bg-white p-3 rounded-xl shadow-[4px_4px_0px_#1e293b] text-center w-36 flex flex-col justify-center">
+                          <div className="font-bold text-xs text-slate-800 border-b-2 border-slate-200 pb-1 mb-1 font-sans">PostgreSQL DB</div>
+                          <div className="text-[10px] text-slate-600 font-sans leading-tight">AudioRecord, Profile, API Keys</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ARQ Queue */}
+                    <div className="h-12 border-l-2 border-slate-800 relative mt-1">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                      <div className="absolute top-2 ml-3 bg-slate-50 px-2 text-[10px] text-slate-500 whitespace-nowrap font-sans">Enqueues Job</div>
+                    </div>
+                    <div className="w-full border-2 border-slate-800 bg-amber-50 p-3 shadow-[4px_4px_0px_#1e293b] rounded-lg text-center z-10">
+                      <div className="font-bold text-amber-900 text-sm">REDIS / ARQ QUEUE</div>
+                      <div className="text-[9px] text-red-600 mt-1 font-bold font-sans">Enqueue Fail ➔ API 500</div>
+                    </div>
+
+                    {/* Background Worker */}
+                    <div className="h-12 border-l-2 border-slate-800 relative mt-1">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                    </div>
+                    <div className="w-72 border-2 border-slate-800 bg-rose-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center z-10 relative">
+                      <div className="font-bold text-rose-900 text-sm">BACKGROUND WORKER</div>
+                      <div className="text-[10px] text-rose-700 mt-1">backend/app/workers/...</div>
+                      <div className="text-[10px] text-slate-600 mt-2 border-t border-rose-200 pt-2 font-sans">Async processing & orchestration</div>
+
+                      {/* System Logs connection */}
+                      <div className="absolute top-1/2 -left-[140px] -mt-[12px] flex items-center">
+                        <div className="border-2 border-slate-800 bg-gray-800 text-white p-3 rounded-lg shadow-[4px_4px_0px_#94a3b8] text-center w-28">
+                          <div className="font-bold text-xs font-sans">System Logs</div>
+                          <div className="text-[9px] text-gray-300 font-sans mt-1">Tracks failures</div>
+                        </div>
+                        <div className="w-12 border-t-2 border-slate-800 border-dashed relative">
+                          <div className="absolute -left-1 -top-[5px] w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-r-[6px] border-r-slate-800"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Worker branches to Gnani, DB, and Gemini */}
+                <div className="flex w-full max-w-4xl justify-center gap-4 relative mt-1">
+                  
+                  {/* Gnani STT */}
+                  <div className="flex flex-col items-center w-1/3">
+                    <div className="w-full h-12 border-l-2 border-t-2 border-slate-800 rounded-tl-xl ml-[50%] relative left-[25%]"></div>
+                    <div className="h-6 border-l-2 border-slate-800 relative">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                    </div>
+                    <div className="w-11/12 border-2 border-slate-800 bg-orange-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center z-10">
+                      <div className="font-bold text-orange-900 text-sm">GNANI STT</div>
+                      <div className="text-[10px] text-orange-700 mt-1 font-sans">Batch API Integration</div>
+                      <div className="text-[9px] text-red-600 mt-3 font-bold bg-white px-2 py-1 rounded border border-red-200 font-sans inline-block">API Fail ➔ Worker Retry</div>
+                    </div>
+                  </div>
+
+                  {/* Transcript DB Segment */}
+                  <div className="flex flex-col items-center w-1/3">
+                    <div className="h-16 border-l-2 border-slate-800 relative">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                    </div>
+                    <div className="w-40 h-32 border-2 border-slate-800 bg-white p-4 shadow-[4px_4px_0px_#1e293b] rounded-full text-center flex flex-col justify-center items-center z-10 mt-2">
+                      <div className="font-bold text-slate-900 text-sm">TRANSCRIPT</div>
+                      <div className="text-[10px] text-slate-500 mt-1 font-sans">Stored in DB</div>
+                    </div>
+                  </div>
+
+                  {/* Gemini Summary */}
+                  <div className="flex flex-col items-center w-1/3">
+                    <div className="w-full h-12 border-r-2 border-t-2 border-slate-800 rounded-tr-xl mr-[50%] relative right-[25%]"></div>
+                    <div className="h-6 border-l-2 border-slate-800 relative">
+                      <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                    </div>
+                    <div className="w-11/12 border-2 border-slate-800 bg-sky-50 p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center z-10">
+                      <div className="font-bold text-sky-900 text-sm">GEMINI SUMMARY</div>
+                      <div className="text-[10px] text-sky-700 mt-1 font-sans">Flash API</div>
+                      <div className="text-[9px] text-red-600 mt-3 font-bold bg-white px-2 py-1 rounded border border-red-200 font-sans inline-block">Summary Fail ➔ Log</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Final Path */}
+                <div className="flex flex-col items-center mt-6 w-full">
+                  <div className="h-12 border-l-2 border-slate-800 border-dashed relative">
+                    <div className="absolute -bottom-1 -left-[5px] w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-slate-800"></div>
+                  </div>
+                  <div className="w-96 border-2 border-slate-800 bg-white p-4 shadow-[4px_4px_0px_#1e293b] rounded-xl text-center z-10 mt-1">
+                    <div className="font-bold text-slate-900 font-sans text-base">RECORDING DETAIL PAGE</div>
+                    <div className="text-xs text-slate-500 mt-1 font-sans">Displays final Transcript & Summary to User</div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </section>
+
+          {/* 3. END-TO-END PROCESSING FLOW */}
           <section id="processing-flow" className="scroll-mt-8">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2 bg-blue-100 rounded-lg">
