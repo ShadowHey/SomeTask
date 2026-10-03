@@ -36,10 +36,10 @@ async def process_audio_note(ctx: dict, note_id: uuid.UUID) -> None:
     await redis.enqueue_job("process_transcription", note_id)
 
 
-def _signed_url_for_note(note: AudioNote) -> str:
+def _signed_url_for_path(storage_path: str) -> str:
     """Create a short-lived, worker-only URL that Gnani can fetch once."""
     response = supabase_client.storage.from_(settings.supabase_bucket_name).create_signed_url(
-        note.storage_path,
+        storage_path,
         expires_in=settings.gnani_url_expiry,
     )
     signed_url = response.get("signedURL") or response.get("signedUrl")
@@ -96,7 +96,7 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
             provider = GnaniTranscriptionProvider(api_key=gnani_key)
             if not processing_job.provider_job_id:
                 try:
-                    presigned_url = _signed_url_for_note(note)
+                    presigned_url = await asyncio.to_thread(_signed_url_for_path, note.storage_path)
                     config = note.transcription_config or {}
                     
                     from app.workers.chunking import get_audio_chunks

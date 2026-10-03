@@ -64,11 +64,12 @@ async def get_audio_chunks(presigned_url: str, storage_path_base: str) -> list[d
                     
             await asyncio.to_thread(upload_chunk, out_path, chunk_storage_path)
             
-            # Get presigned URL for chunk
-            response = supabase_client.storage.from_(settings.supabase_bucket_name).create_signed_url(
-                chunk_storage_path,
-                expires_in=settings.gnani_url_expiry,
-            )
+            def get_chunk_url():
+                return supabase_client.storage.from_(settings.supabase_bucket_name).create_signed_url(
+                    chunk_storage_path,
+                    expires_in=settings.gnani_url_expiry,
+                )
+            response = await asyncio.to_thread(get_chunk_url)
             chunk_url = response.get("signedURL") or response.get("signedUrl")
             chunks.append({"url": chunk_url, "offset_ms": start_time * 1000})
             
