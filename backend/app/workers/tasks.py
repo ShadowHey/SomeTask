@@ -104,7 +104,6 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                 except Exception as e:
                     # Log storage retrieval failures as STORAGE stage
                     await db.rollback()
-                    from app.models.enums import LogStage
                     await _handle_job_failure(
                         db, note.id, processing_job.id, attempt, LogStage.STORAGE.value, e, True
                     )
