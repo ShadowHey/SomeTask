@@ -1,0 +1,4 @@
+{
+  "aptPackages": ["ffmpeg"],
+  "buildAptPackages": ["ffmpeg"]
+}
