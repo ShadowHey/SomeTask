@@ -96,11 +96,15 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
             provider = GnaniTranscriptionProvider(api_key=gnani_key)
             if not processing_job.provider_job_id:
                 try:
+                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to get presigned URL")
                     presigned_url = await asyncio.to_thread(_signed_url_for_path, note.storage_path)
+                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: Got presigned URL")
                     config = note.transcription_config or {}
                     
                     from app.workers.chunking import get_audio_chunks
+                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to call get_audio_chunks")
                     chunks = await get_audio_chunks(presigned_url, note.storage_path)
+                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: Completed get_audio_chunks")
                 except Exception as e:
                     # Log storage retrieval failures as STORAGE stage
                     await db.rollback()
@@ -112,6 +116,7 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                 job_ids = []
                 offsets = []
                 for chunk in chunks:
+                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to create Gnani job")
                     j_id = await provider.create_job(
                         chunk["url"], config, settings.gnani_webhook_url
                     )
