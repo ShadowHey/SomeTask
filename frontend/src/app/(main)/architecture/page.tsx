@@ -45,7 +45,7 @@ export default function ArchitecturePage() {
             </div>
             
             <div className="w-full bg-slate-50 border border-gray-200 rounded-2xl p-8 overflow-x-auto shadow-sm mb-16">
-              <div className="min-w-[900px] flex flex-col items-center font-mono text-sm relative z-10 py-4">
+              <div className="min-w-[900px] w-fit mx-auto flex flex-col items-center font-mono text-sm relative z-10 py-4">
                 
                 {/* USER */}
                 <div className="flex flex-col items-center">
