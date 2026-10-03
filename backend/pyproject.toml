@@ -34,6 +34,7 @@ dependencies = [
 
     # Audio processing (for duration detection and chunking)
     "ffmpeg-python>=0.2,<1",
+    "static-ffmpeg>=3.0,<4",
 ]
 
 [project.optional-dependencies]

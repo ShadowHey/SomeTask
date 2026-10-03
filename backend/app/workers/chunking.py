@@ -2,6 +2,8 @@ import asyncio
 import tempfile
 import os
 import httpx
+import static_ffmpeg
+static_ffmpeg.add_paths() # Ensures ffmpeg/ffprobe binaries are dynamically available
 import ffmpeg
 from app.core.config import settings
 from app.core.supabase import supabase_client
