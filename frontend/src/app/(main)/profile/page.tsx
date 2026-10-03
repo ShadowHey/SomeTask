@@ -341,6 +341,118 @@ export default function Profile() {
           Sign Out
         </button>
       </div>
+      {/* API Key Guide / Info Section */}
+      <div className="mt-8 bg-white ring-1 ring-gray-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-6">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-5 h-5 rounded-full border-2 border-blue-600 flex items-center justify-center">
+              <span className="text-blue-600 text-xs font-bold font-serif leading-none">i</span>
+            </div>
+            <h2 className="text-sm font-bold text-gray-900 tracking-wide uppercase">API Key Guide</h2>
+          </div>
+          <p className="text-sm text-gray-500 mb-6 ml-7">Follow these steps to configure your Gemini and Gnani API keys.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-6">
+              {/* HOW TO USE A CUSTOM KEY */}
+              <div className="bg-gray-50 rounded-lg p-5 border border-gray-200">
+                <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-4">How to Use a Custom Key</h3>
+                <ol className="space-y-2 text-sm text-gray-700 list-none font-medium">
+                  <li><span className="font-bold text-gray-900 mr-2">1</span> Click <span className="font-semibold text-gray-900">Edit</span> next to Gemini or Gnani</li>
+                  <li><span className="font-bold text-gray-900 mr-2">2</span> Enter your API key</li>
+                  <li><span className="font-bold text-gray-900 mr-2">3</span> Uncheck <span className="font-semibold text-gray-900">"use default"</span></li>
+                  <li><span className="font-bold text-gray-900 mr-2">4</span> Click <span className="font-semibold text-gray-900">Save Changes</span></li>
+                </ol>
+                <div className="mt-5 bg-amber-50/50 border border-amber-200 p-3 rounded-md">
+                  <p className="text-xs font-bold text-amber-800 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    IMPORTANT
+                  </p>
+                  <p className="text-xs text-amber-900/80 font-medium mt-1">If "use default" is checked, your custom key will NOT be used.</p>
+                </div>
+              </div>
+
+              {/* TWO SMALL INFO SECTIONS */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                  <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-3">Get Your API Keys</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-800">Gnani AI</p>
+                      <a href="https://app.gnani.ai/voice/api-keys" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-500 font-medium flex items-center gap-1 group">Create a key <span className="transition-transform group-hover:translate-x-0.5">&rarr;</span></a>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-gray-800">Google Gemini</p>
+                      <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-500 font-medium flex items-center gap-1 group">Create a key <span className="transition-transform group-hover:translate-x-0.5">&rarr;</span></a>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                  <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-3">Use Default Keys</h3>
+                  <p className="text-xs text-gray-600 mb-3 leading-relaxed">Keep <span className="font-semibold text-gray-800">"use default"</span> checked to use VOICY's default key.</p>
+                  <p className="text-xs text-gray-600 leading-relaxed">Gemini and Gnani can be configured independently.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* SECURITY SECTION */}
+            <div className="h-full">
+              <div className="border border-gray-200 rounded-lg p-5 bg-white h-full flex flex-col">
+                <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-5 flex items-center gap-2">
+                  <span>🔒</span> YOUR API KEYS ARE PROTECTED
+                </h3>
+                <ul className="space-y-4 flex-1">
+                  <li className="flex items-start gap-2">
+                    <span className="text-gray-900 font-bold text-xs shrink-0 mt-0.5">✓</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Encrypted at rest</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Keys are encrypted before being stored in the database.</p>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-gray-900 font-bold text-xs shrink-0 mt-0.5">✓</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Database administrators cannot see your key</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Only encrypted ciphertext is stored.</p>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-gray-900 font-bold text-xs shrink-0 mt-0.5">✓</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Decrypted only when needed</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Keys are temporarily decrypted in backend memory when required.</p>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-gray-900 font-bold text-xs shrink-0 mt-0.5">✓</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Never returned to the browser</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Your saved plaintext key is never exposed to the frontend.</p>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-gray-900 font-bold text-xs shrink-0 mt-0.5">✓</span>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Always masked after saving</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Saved keys cannot be viewed in plaintext.</p>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECURITY REMINDER FOOTER */}
+        <div className="bg-gray-50 border-t border-gray-200 p-4 px-6">
+          <p className="text-xs font-bold text-gray-900 uppercase tracking-wide flex items-center gap-1.5 mb-1">
+            <svg className="w-3.5 h-3.5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            Security Reminder
+          </p>
+          <p className="text-[11px] text-gray-600 font-medium">For testing, use a separate/scrap API account and key. Never use or share your personal or production API keys.</p>
+        </div>
+      </div>
 
       {isAvatarModalOpen && (
         <div className="relative z-50" aria-labelledby="modal-title" role="dialog" aria-modal="true">
