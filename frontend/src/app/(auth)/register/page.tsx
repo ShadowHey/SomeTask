@@ -20,14 +20,12 @@ export default function Register() {
   const [username, setUsername] = useState("");
   const [avatarId, setAvatarId] = useState("avatar-01");
   const [error, setError] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const supabase = createClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setSuccessMsg("");
     setIsSubmitting(true);
 
     try {
@@ -48,11 +46,8 @@ export default function Register() {
         return;
       }
 
-      if (data?.user && data?.session === null) {
-        // "Confirm Email" is ON: user created but no session yet. 
-        setSuccessMsg("Registration successful! Please check your email inbox and click the verification link to activate your account.");
-      } else if (data?.session) {
-        // Fallback: If confirm email is actually OFF, it will just log them in
+      // If email confirmation is disabled, Supabase returns a session immediately
+      if (data?.session) {
         try {
           await api.profile.update({
             username: username || undefined,
@@ -61,6 +56,11 @@ export default function Register() {
         } catch (e) {
           console.error("Failed to set initial profile:", e);
         }
+        // Force redirect to home after profile is updated
+        window.location.href = "/home";
+      } else {
+        // Fallback just in case
+        window.location.href = "/login";
       }
     } catch {
       setError("An unexpected error occurred.");
@@ -75,14 +75,12 @@ export default function Register() {
         <h2 className="mt-6 text-center text-3xl font-bold tracking-tight text-gray-900">
           Create a new account
         </h2>
-        {!successMsg && (
-          <p className="mt-2 text-center text-sm text-gray-600">
-            Already have an account?{" "}
-            <Link href="/login" className="font-medium text-blue-600 hover:text-blue-500">
-              Sign in
-            </Link>
-          </p>
-        )}
+        <p className="mt-2 text-center text-sm text-gray-600">
+          Already have an account?{" "}
+          <Link href="/login" className="font-medium text-blue-600 hover:text-blue-500">
+            Sign in
+          </Link>
+        </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -94,18 +92,9 @@ export default function Register() {
             </div>
           )}
 
-          {successMsg ? (
-            <div className="bg-green-50 border-l-4 border-green-500 p-6 text-center">
-              <svg className="mx-auto h-12 w-12 text-green-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
-              </svg>
-              <h3 className="text-lg font-medium text-green-900 mb-2">Check your email</h3>
-              <p className="text-sm text-green-700">{successMsg}</p>
-            </div>
-          ) : (
-            <form className="space-y-6" onSubmit={handleSubmit}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
+          <form className="space-y-6" onSubmit={handleSubmit}>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
                   Choose an Avatar
                 </label>
                 <div className="mt-3 flex justify-between">
@@ -192,7 +181,6 @@ export default function Register() {
                 </button>
               </div>
             </form>
-          )}
 
         </div>
       </div>
