@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 
 from arq import Retry
 from sqlalchemy import delete, select
@@ -26,6 +27,20 @@ logger = get_logger(__name__)
 
 RETRY_DELAYS = [60, 300, 600]
 _TERMINAL_GNANI_STATUSES = {"FAILED", "START_FAILED", "CANCELLED"}
+
+# Must match WorkerSettings.job_timeout in app/workers/main.py. A job row still marked
+# RUNNING after this long cannot belong to a live ARQ task (ARQ would have killed it),
+# so it is a leftover from a crash/redeploy and may be safely reclaimed.
+WORKER_JOB_TIMEOUT_SECONDS = 3600
+_STALE_RUNNING_JOB_AFTER = timedelta(seconds=WORKER_JOB_TIMEOUT_SECONDS + 300)
+
+
+def _is_stale_running_job(processing_job: ProcessingJob) -> bool:
+    """True when a RUNNING job row was abandoned by a crashed worker."""
+    updated_at = processing_job.updated_at
+    if updated_at is None:
+        return False
+    return datetime.now(timezone.utc) - updated_at > _STALE_RUNNING_JOB_AFTER
 
 
 async def process_audio_note(ctx: dict, note_id: uuid.UUID) -> None:
@@ -60,8 +75,15 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
 
         processing_job = _find_processing_job(note, JobType.TRANSCRIPTION)
         if processing_job and processing_job.status == JobStatus.RUNNING.value:
-            logger.info("transcription_duplicate_skipped", note_id=str(note.id), attempt=attempt)
-            return
+            if not _is_stale_running_job(processing_job):
+                logger.info("transcription_duplicate_skipped", note_id=str(note_id), attempt=attempt)
+                return
+            logger.warning(
+                "transcription_stale_lock_recovered",
+                note_id=str(note_id),
+                job_id=str(processing_job.id),
+                attempt=attempt,
+            )
         if note.status in {
             AudioStatus.TRANSCRIPTION_COMPLETED.value,
             AudioStatus.TRANSCRIPTION_PROCESSING.value,
@@ -83,6 +105,11 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
         note.status = AudioStatus.TRANSCRIPTION_STARTING.value
         await db.commit()
 
+        # Capture plain values now. db.rollback() expires every ORM instance, and reading an
+        # expired attribute inside async code triggers a hidden sync load -> MissingGreenlet.
+        # Error handlers below must only use these locals, never note.* / processing_job.*.
+        job_pk = processing_job.id
+
         try:
             from app.models.models import UserApiKeys
             from app.core.security import decrypt_api_key
@@ -95,28 +122,30 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                 
             provider = GnaniTranscriptionProvider(api_key=gnani_key)
             if not processing_job.provider_job_id:
+                config = note.transcription_config or {}
+                logger.info("transcription_preparing_audio", note_id=str(note_id), job_id=str(job_pk))
                 try:
-                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to get presigned URL")
                     presigned_url = await asyncio.to_thread(_signed_url_for_path, note.storage_path)
-                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: Got presigned URL")
-                    config = note.transcription_config or {}
-                    
+
                     from app.workers.chunking import get_audio_chunks
-                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to call get_audio_chunks")
+
                     chunks = await get_audio_chunks(presigned_url, note.storage_path)
-                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: Completed get_audio_chunks")
+                except ProviderError:
+                    raise
                 except Exception as e:
-                    # Log storage retrieval failures as STORAGE stage
-                    await db.rollback()
-                    await _handle_job_failure(
-                        db, note.id, processing_job.id, attempt, LogStage.STORAGE.value, e, True
-                    )
-                    return
-                
+                    # Storage/FFmpeg problems are usually transient; let the single outer
+                    # handler apply the 1m -> 5m -> 10m retry policy.
+                    raise ProviderError(
+                        f"Unable to prepare audio for transcription: {type(e).__name__}: {e}",
+                        retryable=True,
+                    ) from e
+                logger.info(
+                    "transcription_audio_ready", note_id=str(note_id), chunk_count=len(chunks)
+                )
+
                 job_ids = []
                 offsets = []
                 for chunk in chunks:
-                    await create_system_log(db, note.user_id, note.id, LogLevel.INFO, LogStage.TRANSCRIPTION, "DEBUG: About to create Gnani job")
                     j_id = await provider.create_job(
                         chunk["url"], config, settings.gnani_webhook_url
                     )
@@ -200,15 +229,17 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                             message=f"Transcription completed successfully for '{note.recording_name or note.original_filename}'."
                         )
                         break
+        except Retry:
+            raise
         except ProviderError as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "transcription", error, error.retryable
+                db, note_id, job_pk, attempt, "transcription", error, error.retryable
             )
         except Exception as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "transcription", error, retryable=True
+                db, note_id, job_pk, attempt, "transcription", error, retryable=True
             )
 
 
@@ -247,6 +278,7 @@ async def process_completed_transcription(ctx: dict, note_id: uuid.UUID, provide
         processing_job = _find_processing_job(note, JobType.TRANSCRIPTION)
         if not processing_job:
             return
+        job_pk = processing_job.id  # safe to use after rollback (see process_transcription)
             
         try:
             from app.models.models import UserApiKeys
@@ -292,15 +324,17 @@ async def process_completed_transcription(ctx: dict, note_id: uuid.UUID, provide
                 stage=LogStage.TRANSCRIPTION,
                 message=f"Transcription completed successfully for '{note.recording_name or note.original_filename}'."
             )
+        except Retry:
+            raise
         except ProviderError as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "transcription", error, error.retryable
+                db, note_id, job_pk, attempt, "transcription", error, error.retryable
             )
         except Exception as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "transcription", error, retryable=True
+                db, note_id, job_pk, attempt, "transcription", error, retryable=True
             )
 
 
@@ -485,6 +519,7 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
             
         note.summary_status = "processing"
         await db.commit()
+        job_pk = processing_job.id  # safe to use after rollback (see process_transcription)
         
         await create_system_log(
             db=db,
@@ -542,15 +577,17 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
                 stage=LogStage.SUMMARY,
                 message=f"AI Summary completed successfully for '{note.recording_name or note.original_filename}'."
             )
+        except Retry:
+            raise
         except SummaryProviderError as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "summary", error, error.retryable
+                db, note_id, job_pk, attempt, "summary", error, error.retryable
             )
         except Exception as error:
             await db.rollback()
             await _handle_job_failure(
-                db, note.id, processing_job.id, attempt, "summary", error, retryable=True
+                db, note_id, job_pk, attempt, "summary", error, retryable=True
             )
 
 

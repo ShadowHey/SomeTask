@@ -7,7 +7,13 @@ from arq.connections import RedisSettings, create_pool
 
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
-from app.workers.tasks import generate_summary, process_audio_note, process_transcription
+from app.workers.tasks import (
+    WORKER_JOB_TIMEOUT_SECONDS,
+    generate_summary,
+    process_audio_note,
+    process_completed_transcription,
+    process_transcription,
+)
 
 logger = get_logger(__name__)
 
@@ -32,13 +38,14 @@ class WorkerSettings:
     functions: ClassVar[list[Callable[..., Any]]] = [
         process_audio_note,
         process_transcription,
+        process_completed_transcription,
         generate_summary,
     ]
     redis_settings = redis_settings
     on_startup = startup
     on_shutdown = shutdown
     max_jobs = 10
-    job_timeout = 3600  # 1 hour max per job
+    job_timeout = WORKER_JOB_TIMEOUT_SECONDS  # 1 hour max per job; also drives stale-lock recovery
 
     # Retry policy is handled in the tasks themselves using arq.Retry
     # because different stages have different delays (1m, 5m, 10m).

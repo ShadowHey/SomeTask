@@ -8,6 +8,7 @@ from app.models.enums import LogLevel, LogStage
 
 async def create_system_log(
     db: AsyncSession,
+    *,
     user_id: uuid.UUID,
     level: LogLevel,
     stage: LogStage,
