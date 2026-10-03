@@ -308,7 +308,6 @@ export default function ArchitecturePage() {
                   <li><strong>Polling Dependency:</strong> Webhook infrastructure is implemented for Gnani, but polling is often the default path due to local NAT configurations blocking external webhooks.</li>
                   <li><strong>Single-Node Processing:</strong> FFmpeg audio chunking happens on the same hardware executing the FastAPI server/worker, which could CPU-starve the API if many 4-hour audio files are uploaded concurrently.</li>
                   <li><strong>No WebSocket Streams:</strong> The frontend relies on interval polling to update the transcript status UI rather than utilizing WebSockets or Server-Sent Events (SSE).</li>
-                  <li><strong>Email Verification Gap:</strong> The application does not currently enforce a hardcore security protocol for verifying user identities at sign-up. As a result, it is technically possible for users to create accounts using unverified or fake email addresses and gain access to the system.</li>
                 </ul>
               </div>
             </section>
@@ -325,7 +324,6 @@ export default function ArchitecturePage() {
                   <li><strong>Dedicated Media Server:</strong> Offload FFmpeg audio chunking and processing to a dedicated AWS Lambda function or a highly scaled media-worker cluster to protect API availability.</li>
                   <li><strong>SSE Implementation:</strong> Replace frontend REST polling for job status with Server-Sent Events to reduce database load and provide immediate feedback.</li>
                   <li><strong>Caching Layer:</strong> Implement Redis caching for heavily accessed, immutable TranscriptSegments to reduce PostgreSQL sequential scans on the <code className="text-xs">recordings/[id]</code> page.</li>
-                  <li><strong>OTP Email Verification:</strong> Implement a robust, OTP (One-Time Password) based email verification flow during registration. This security protocol will require users to enter a valid OTP sent to their inbox before their account is activated, completely preventing fake email sign-ups.</li>
                 </ul>
               </div>
             </section>
