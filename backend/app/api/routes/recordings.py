@@ -88,7 +88,21 @@ async def start_processing(
     except Exception as error:
         # Keep the record retryable by the user instead of displaying a permanent queued state.
         note.status = AudioStatus.UPLOADED.value
+        
+        from app.crud.logs import create_system_log
+        from app.models.enums import LogLevel, LogStage
+        
+        await create_system_log(
+            db=db,
+            user_id=user_id,
+            note_id=note.id,
+            level=LogLevel.ERROR,
+            stage=LogStage.SYSTEM,
+            message="Failed to enqueue transcription job.",
+            details={"error_type": type(error).__name__}
+        )
         await db.commit()
+        
         logger.error(
             "recording_enqueue_failed", note_id=str(note.id), error_type=type(error).__name__
         )
@@ -97,6 +111,19 @@ async def start_processing(
             detail="Processing could not be queued. Please try again.",
         ) from error
     logger.info("recording_queued", recording_id=str(note.id), user_id=str(user_id))
+    
+    from app.crud.logs import create_system_log
+    from app.models.enums import LogLevel, LogStage
+    
+    await create_system_log(
+        db=db,
+        user_id=user_id,
+        note_id=note.id,
+        level=LogLevel.INFO,
+        stage=LogStage.UPLOAD,
+        message=f"Uploaded and queued '{note.recording_name or note.original_filename}'."
+    )
+    
     return await _get_owned_note(db, note.id, user_id, include_segments=True)
 
 
@@ -197,7 +224,21 @@ async def generate_summary(
         await redis.enqueue_job("generate_summary", note.id)
     except Exception as error:
         note.summary_status = "failed"
+        
+        from app.crud.logs import create_system_log
+        from app.models.enums import LogLevel, LogStage
+        
+        await create_system_log(
+            db=db,
+            user_id=user_id,
+            note_id=note.id,
+            level=LogLevel.ERROR,
+            stage=LogStage.SYSTEM,
+            message="Failed to enqueue summary job.",
+            details={"error_type": type(error).__name__}
+        )
         await db.commit()
+        
         logger.error(
             "summary_enqueue_failed", note_id=str(note.id), error_type=type(error).__name__
         )
@@ -206,6 +247,19 @@ async def generate_summary(
             detail="Summary generation could not be queued. Please try again.",
         ) from error
     logger.info("summary_queued", recording_id=str(note.id), user_id=str(user_id))
+    
+    from app.crud.logs import create_system_log
+    from app.models.enums import LogLevel, LogStage
+    
+    await create_system_log(
+        db=db,
+        user_id=user_id,
+        note_id=note.id,
+        level=LogLevel.INFO,
+        stage=LogStage.SUMMARY,
+        message=f"AI Summary queued for '{note.recording_name or note.original_filename}'."
+    )
+    
     return await _get_owned_note(db, note.id, user_id, include_segments=True)
 
 

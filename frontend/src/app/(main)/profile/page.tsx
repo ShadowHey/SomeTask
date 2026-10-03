@@ -6,7 +6,7 @@ import { Avatar, AVATARS } from "@/components/Avatar";
 import { api } from "@/lib/api";
 
 export default function Profile() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, logout } = useAuth();
   const [username, setUsername] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -14,27 +14,108 @@ export default function Profile() {
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
   const [tempAvatarId, setTempAvatarId] = useState<string | null>(null);
 
+  // API Keys State
+  const [hasCustomGemini, setHasCustomGemini] = useState(false);
+  const [hasCustomGnani, setHasCustomGnani] = useState(false);
+  const [useDefaultGemini, setUseDefaultGemini] = useState(true);
+  const [useDefaultGnani, setUseDefaultGnani] = useState(true);
+  
+  const [isEditingGemini, setIsEditingGemini] = useState(false);
+  const [isEditingGnani, setIsEditingGnani] = useState(false);
+  const [geminiInput, setGeminiInput] = useState("");
+  const [gnaniInput, setGnaniInput] = useState("");
+  
+  const [isRemoveKeysModalOpen, setIsRemoveKeysModalOpen] = useState(false);
+
+  // Original states for comparison
+  const [initialUseDefaultGemini, setInitialUseDefaultGemini] = useState(true);
+  const [initialUseDefaultGnani, setInitialUseDefaultGnani] = useState(true);
+
   useEffect(() => {
     if (profile) {
       setUsername(profile.username || "");
     }
   }, [profile]);
 
-  const hasChanges = username !== (profile?.username || "");
+  const loadApiKeys = async () => {
+    try {
+      const keys = await api.profile.getKeys();
+      setHasCustomGemini(keys.gemini.has_custom_key);
+      setUseDefaultGemini(keys.gemini.use_default);
+      setInitialUseDefaultGemini(keys.gemini.use_default);
+      
+      setHasCustomGnani(keys.gnani.has_custom_key);
+      setUseDefaultGnani(keys.gnani.use_default);
+      setInitialUseDefaultGnani(keys.gnani.use_default);
+    } catch (err) {
+      console.error("Failed to load API keys", err);
+    }
+  };
+
+  useEffect(() => {
+    loadApiKeys();
+  }, []);
+
+  const hasProfileChanges = username !== (profile?.username || "");
+  const hasKeyChanges = 
+    (isEditingGemini && geminiInput.trim() !== "") || 
+    (isEditingGnani && gnaniInput.trim() !== "") ||
+    useDefaultGemini !== initialUseDefaultGemini ||
+    useDefaultGnani !== initialUseDefaultGnani;
+
+  const hasChanges = hasProfileChanges || hasKeyChanges;
 
   const handleSave = async () => {
+    // Validation
+    if (!useDefaultGemini && !hasCustomGemini && (!isEditingGemini || !geminiInput.trim())) {
+      setError("Please enter a Gemini API key or select Use Default.");
+      return;
+    }
+    if (!useDefaultGnani && !hasCustomGnani && (!isEditingGnani || !gnaniInput.trim())) {
+      setError("Please enter a Gnani API key or select Use Default.");
+      return;
+    }
+
     if (!hasChanges) return;
+    
     setIsSaving(true);
     setError(null);
     setSaveSuccess(false);
 
     try {
-      await api.profile.update({ username });
-      await refreshProfile();
+      if (hasProfileChanges) {
+        await api.profile.update({ username });
+        await refreshProfile();
+      }
+
+      if (hasKeyChanges) {
+        const keyUpdatePayload: any = {};
+        if (isEditingGemini && geminiInput.trim()) {
+          keyUpdatePayload.gemini_api_key = geminiInput.trim();
+        }
+        if (isEditingGnani && gnaniInput.trim()) {
+          keyUpdatePayload.gnani_api_key = gnaniInput.trim();
+        }
+        if (useDefaultGemini !== initialUseDefaultGemini) {
+          keyUpdatePayload.use_default_gemini = useDefaultGemini;
+        }
+        if (useDefaultGnani !== initialUseDefaultGnani) {
+          keyUpdatePayload.use_default_gnani = useDefaultGnani;
+        }
+        
+        await api.profile.updateKeys(keyUpdatePayload);
+        await loadApiKeys();
+        
+        setIsEditingGemini(false);
+        setIsEditingGnani(false);
+        setGeminiInput("");
+        setGnaniInput("");
+      }
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
-      setError(err.message || "Failed to update profile");
+      setError(err.message || "Failed to save changes");
     } finally {
       setIsSaving(false);
     }
@@ -53,9 +134,20 @@ export default function Profile() {
       alert(err.message || "Failed to update avatar");
     }
   };
+  
+  const handleRemoveCustomKeys = async () => {
+    try {
+      await api.profile.removeKeys();
+      await loadApiKeys();
+      setIsRemoveKeysModalOpen(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to remove custom keys");
+      setIsRemoveKeysModalOpen(false);
+    }
+  };
 
   return (
-    <div className="max-w-4xl mx-auto py-10 px-4 sm:px-6 lg:px-8">
+    <div className="max-w-4xl mx-auto py-10 px-4 sm:px-6 lg:px-8 pb-32">
       <div className="mb-8">
         <h1 className="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight">
           Profile
@@ -65,7 +157,7 @@ export default function Profile() {
         </p>
       </div>
 
-      <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden mb-6">
         <div className="p-8 border-b border-gray-200 flex flex-col sm:flex-row items-center gap-6 bg-gray-50/50">
           <Avatar avatarId={profile?.avatar_id} className="w-24 h-24 ring-4 ring-white shadow-md" />
           <div className="flex flex-col items-center sm:items-start space-y-3">
@@ -85,51 +177,142 @@ export default function Profile() {
           </div>
         </div>
 
-        <div className="p-8 space-y-6">
-          <h3 className="text-base font-semibold leading-6 text-gray-900">Account Information</h3>
-          
-          <div className="grid grid-cols-1 gap-y-6 sm:grid-cols-2 sm:gap-x-8">
-            <div>
-              <label htmlFor="username" className="block text-sm font-medium leading-6 text-gray-900">
-                Username
-              </label>
-              <div className="relative mt-2 rounded-md shadow-sm">
-                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                  <span className="text-gray-500 sm:text-sm">@</span>
+        <div className="p-8 space-y-8">
+          <div>
+            <h3 className="text-base font-semibold leading-6 text-gray-900 mb-6">Account Information</h3>
+            <div className="grid grid-cols-1 gap-y-6 sm:grid-cols-2 sm:gap-x-8">
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium leading-6 text-gray-900">
+                  Username
+                </label>
+                <div className="relative mt-2 rounded-md shadow-sm">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                    <span className="text-gray-500 sm:text-sm">@</span>
+                  </div>
+                  <input
+                    type="text"
+                    name="username"
+                    id="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                    className="block w-full rounded-md border-0 py-2.5 pl-8 text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    placeholder="username"
+                  />
                 </div>
-                <input
-                  type="text"
-                  name="username"
-                  id="username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                  className="block w-full rounded-md border-0 py-2.5 pl-8 text-gray-900 ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
-                  placeholder="username"
-                />
               </div>
-            </div>
 
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium leading-6 text-gray-900">
-                Email
-              </label>
-              <div className="mt-2">
-                <input
-                  type="email"
-                  name="email"
-                  id="email"
-                  value={user?.email || ""}
-                  disabled
-                  className="block w-full rounded-md border-0 py-2.5 text-gray-500 bg-gray-50 ring-1 ring-inset ring-gray-300 sm:text-sm sm:leading-6 cursor-not-allowed"
-                />
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium leading-6 text-gray-900">
+                  Email
+                </label>
+                <div className="mt-2">
+                  <input
+                    type="email"
+                    name="email"
+                    id="email"
+                    value={user?.email || ""}
+                    disabled
+                    className="block w-full rounded-md border-0 py-2.5 text-gray-500 bg-gray-50 ring-1 ring-inset ring-gray-300 sm:text-sm sm:leading-6 cursor-not-allowed px-3"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
-          {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
-          {saveSuccess && <p className="text-sm text-green-600 font-medium">Profile updated successfully!</p>}
+          <div className="border-t border-gray-200 pt-8 space-y-6">
+            
+            {/* Gemini API Key */}
+            <div>
+              <label className="block text-sm font-medium leading-6 text-gray-900 uppercase tracking-wider mb-2">
+                Gemini API Key
+              </label>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 max-w-lg relative rounded-md shadow-sm">
+                  <input
+                    type={isEditingGemini ? "text" : "password"}
+                    value={isEditingGemini ? geminiInput : (hasCustomGemini && !useDefaultGemini ? "••••••••••••••••••••••••" : "")}
+                    disabled={!isEditingGemini}
+                    onChange={(e) => setGeminiInput(e.target.value)}
+                    placeholder={isEditingGemini ? "Enter new Gemini API key" : ""}
+                    className={`block w-full rounded-md border-0 py-2.5 px-3 text-gray-900 ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 ${!isEditingGemini ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isEditingGemini) {
+                      setIsEditingGemini(false);
+                      setGeminiInput("");
+                    } else {
+                      setIsEditingGemini(true);
+                      setGeminiInput("");
+                    }
+                  }}
+                  className="rounded-md bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-colors"
+                >
+                  {isEditingGemini ? "Cancel" : "Edit"}
+                </button>
+                <label className="flex items-center gap-2 cursor-pointer ml-2">
+                  <input
+                    type="checkbox"
+                    checked={useDefaultGemini}
+                    onChange={(e) => setUseDefaultGemini(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-gray-900">use default</span>
+                </label>
+              </div>
+            </div>
 
-          <div className="pt-4 flex justify-end">
+            {/* Gnani AI API Key */}
+            <div className="pt-2">
+              <label className="block text-sm font-medium leading-6 text-gray-900 uppercase tracking-wider mb-2">
+                Gnani AI API Key
+              </label>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 max-w-lg relative rounded-md shadow-sm">
+                  <input
+                    type={isEditingGnani ? "text" : "password"}
+                    value={isEditingGnani ? gnaniInput : (hasCustomGnani && !useDefaultGnani ? "••••••••••••••••••••••••" : "")}
+                    disabled={!isEditingGnani}
+                    onChange={(e) => setGnaniInput(e.target.value)}
+                    placeholder={isEditingGnani ? "Enter new Gnani API key" : ""}
+                    className={`block w-full rounded-md border-0 py-2.5 px-3 text-gray-900 ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 ${!isEditingGnani ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isEditingGnani) {
+                      setIsEditingGnani(false);
+                      setGnaniInput("");
+                    } else {
+                      setIsEditingGnani(true);
+                      setGnaniInput("");
+                    }
+                  }}
+                  className="rounded-md bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-colors"
+                >
+                  {isEditingGnani ? "Cancel" : "Edit"}
+                </button>
+                <label className="flex items-center gap-2 cursor-pointer ml-2">
+                  <input
+                    type="checkbox"
+                    checked={useDefaultGnani}
+                    onChange={(e) => setUseDefaultGnani(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-gray-900">use default</span>
+                </label>
+              </div>
+            </div>
+
+          </div>
+
+          {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
+          {saveSuccess && <p className="text-sm text-green-600 font-medium">Profile changes saved successfully.</p>}
+
+          <div className="pt-6 flex justify-end">
             <button
               onClick={handleSave}
               disabled={!hasChanges || isSaving}
@@ -141,6 +324,22 @@ export default function Profile() {
             </button>
           </div>
         </div>
+      </div>
+      
+      {/* Footer Buttons */}
+      <div className="flex justify-end items-center gap-4 mt-6">
+        <button
+          onClick={() => setIsRemoveKeysModalOpen(true)}
+          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-colors"
+        >
+          Remove Custom Keys
+        </button>
+        <button
+          onClick={logout}
+          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-colors"
+        >
+          Sign Out
+        </button>
       </div>
 
       {isAvatarModalOpen && (
@@ -192,6 +391,52 @@ export default function Profile() {
                   <button
                     type="button"
                     onClick={() => setIsAvatarModalOpen(false)}
+                    className="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Keys Modal */}
+      {isRemoveKeysModalOpen && (
+        <div className="relative z-50" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+          <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity" onClick={() => setIsRemoveKeysModalOpen(false)}></div>
+          <div className="fixed inset-0 z-10 w-screen overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <div className="relative transform overflow-hidden rounded-2xl bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg">
+                <div className="bg-white px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
+                  <div className="sm:flex sm:items-start">
+                    <div className="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                      <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                    </div>
+                    <div className="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                      <h3 className="text-base font-semibold leading-6 text-gray-900" id="modal-title">Remove Custom API Keys?</h3>
+                      <div className="mt-2">
+                        <p className="text-sm text-gray-500">
+                          This will permanently remove your saved Gemini and Gnani API keys. The application will use the default keys afterward. This action cannot be undone.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
+                  <button
+                    type="button"
+                    onClick={handleRemoveCustomKeys}
+                    className="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto"
+                  >
+                    Remove Keys
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsRemoveKeysModalOpen(false)}
                     className="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
                   >
                     Cancel

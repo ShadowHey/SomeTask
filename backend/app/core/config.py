@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["http://localhost:3000"]
 
     # Database
+    encryption_key: str = "your-32-byte-base64-encoded-fernet-key=" # Use fernet.generate_key().decode()
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/audio_notes"
 
     # Redis (for ARQ)

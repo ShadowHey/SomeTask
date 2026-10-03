@@ -16,9 +16,11 @@ from app.core.logging import get_logger
 from app.core.supabase import supabase_client
 from app.db.session import async_session_factory
 from app.models.enums import AudioStatus, JobStatus, JobType
-from app.models.models import AudioNote, ProcessingJob, TranscriptSegment
+from app.models.models import AudioNote, ProcessingJob, TranscriptSegment, UsageRecord
 from app.services.summarization.gemini import GeminiSummaryProvider, SummaryProviderError
 from app.services.transcription.gnani import GnaniTranscriptionProvider, ProviderError
+from app.crud.logs import create_system_log
+from app.models.enums import LogLevel, LogStage
 
 logger = get_logger(__name__)
 
@@ -82,20 +84,58 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
         await db.commit()
 
         try:
-            provider = GnaniTranscriptionProvider()
+            from app.models.models import UserApiKeys
+            from app.core.security import decrypt_api_key
+            keys_result = await db.execute(select(UserApiKeys).where(UserApiKeys.user_id == note.user_id))
+            keys_record = keys_result.scalar_one_or_none()
+            
+            gnani_key = None
+            if keys_record and not keys_record.use_default_gnani:
+                gnani_key = decrypt_api_key(keys_record.encrypted_gnani_key)
+                
+            provider = GnaniTranscriptionProvider(api_key=gnani_key)
             if not processing_job.provider_job_id:
-                presigned_url = _signed_url_for_note(note)
-                config = note.transcription_config or {}
-                processing_job.provider_job_id = await provider.create_job(
-                    presigned_url, config, settings.gnani_webhook_url
-                )
+                try:
+                    presigned_url = _signed_url_for_note(note)
+                    config = note.transcription_config or {}
+                    
+                    from app.workers.chunking import get_audio_chunks
+                    chunks = await get_audio_chunks(presigned_url, note.storage_path)
+                except Exception as e:
+                    # Log storage retrieval failures as STORAGE stage
+                    await db.rollback()
+                    from app.models.enums import LogStage
+                    await _handle_job_failure(
+                        db, note.id, processing_job.id, attempt, LogStage.STORAGE.value, e, True
+                    )
+                    return
+                
+                job_ids = []
+                offsets = []
+                for chunk in chunks:
+                    j_id = await provider.create_job(
+                        chunk["url"], config, settings.gnani_webhook_url
+                    )
+                    await provider.start_job(j_id)
+                    job_ids.append(j_id)
+                    offsets.append(chunk["offset_ms"])
+                    
+                processing_job.provider_job_id = ",".join(job_ids)
+                processing_job.raw_provider_response = {"offsets": offsets}
                 await db.commit()
                 
-                await provider.start_job(processing_job.provider_job_id)
                 note.status = AudioStatus.TRANSCRIPTION_PROCESSING.value
                 await db.commit()
                 logger.info(
                     "transcription_started", note_id=str(note.id), provider_job_id=processing_job.provider_job_id
+                )
+                await create_system_log(
+                    db=db,
+                    user_id=note.user_id,
+                    note_id=note.id,
+                    level=LogLevel.INFO,
+                    stage=LogStage.TRANSCRIPTION,
+                    message=f"Transcription started for '{note.recording_name or note.original_filename}' via Gnani AI."
                 )
             
             if not settings.gnani_webhook_url:
@@ -104,33 +144,58 @@ async def process_transcription(ctx: dict, note_id: uuid.UUID) -> None:
                     note_id=str(note.id),
                     provider_job_id=processing_job.provider_job_id,
                 )
+                poll_count = 0
                 while True:
+                    if poll_count >= settings.gnani_max_poll_attempts:
+                        raise ProviderError("Transcription polling timed out.", retryable=False)
+                    poll_count += 1
+                    
                     await asyncio.sleep(10)
-                    status_info = await provider.poll_status(processing_job.provider_job_id)
-                    job_status = str(status_info.get("status", "")).upper()
-                    logger.info(
-                        "transcription_polling_status",
-                        note_id=str(note.id),
-                        job_status=job_status,
-                    )
-                    if job_status == "COMPLETED":
-                        await asyncio.sleep(2)
-                        transcript_json = await _download_transcript(
-                            provider, processing_job.provider_job_id
+                    job_ids = processing_job.provider_job_id.split(",")
+                    all_completed = True
+                    for j_id in job_ids:
+                        status_info = await provider.poll_status(j_id)
+                        job_status = str(status_info.get("status", "")).upper()
+                        logger.info(
+                            "transcription_polling_status",
+                            note_id=str(note.id),
+                            job_status=job_status,
+                            j_id=j_id
                         )
-                        await _store_transcript(db, note, processing_job, transcript_json)
+                        if job_status in _TERMINAL_GNANI_STATUSES:
+                            raise ProviderError(
+                                f"Gnani job {j_id} terminated with status: {job_status}",
+                                retryable=False,
+                                response_data=status_info,
+                            )
+                        if job_status != "COMPLETED":
+                            all_completed = False
+                            break
+                            
+                    if all_completed:
+                        await asyncio.sleep(2)
+                        offsets = processing_job.raw_provider_response.get("offsets", [0] * len(job_ids)) if processing_job.raw_provider_response else [0] * len(job_ids)
+                        all_transcripts = []
+                        for j_id, offset in zip(job_ids, offsets):
+                            transcript_json = await _download_transcript(provider, j_id)
+                            transcript_json["_offset_ms"] = offset
+                            all_transcripts.append(transcript_json)
+                            
+                        await _store_transcripts(db, note, processing_job, all_transcripts)
                         logger.info(
                             "transcription_completed_via_polling",
                             note_id=str(note.id),
                             provider_job_id=processing_job.provider_job_id,
                         )
-                        break
-                    if job_status in _TERMINAL_GNANI_STATUSES:
-                        raise ProviderError(
-                            f"Gnani job terminated with status: {job_status}",
-                            retryable=False,
-                            response_data=status_info,
+                        await create_system_log(
+                            db=db,
+                            user_id=note.user_id,
+                            note_id=note.id,
+                            level=LogLevel.INFO,
+                            stage=LogStage.TRANSCRIPTION,
+                            message=f"Transcription completed successfully for '{note.recording_name or note.original_filename}'."
                         )
+                        break
         except ProviderError as error:
             await db.rollback()
             await _handle_job_failure(
@@ -180,11 +245,48 @@ async def process_completed_transcription(ctx: dict, note_id: uuid.UUID, provide
             return
             
         try:
-            provider = GnaniTranscriptionProvider()
-            transcript_json = await _download_transcript(provider, provider_job_id)
-            await _store_transcript(db, note, processing_job, transcript_json)
+            from app.models.models import UserApiKeys
+            from app.core.security import decrypt_api_key
+            keys_result = await db.execute(select(UserApiKeys).where(UserApiKeys.user_id == note.user_id))
+            keys_record = keys_result.scalar_one_or_none()
+            
+            gnani_key = None
+            if keys_record and not keys_record.use_default_gnani:
+                gnani_key = decrypt_api_key(keys_record.encrypted_gnani_key)
+                
+            provider = GnaniTranscriptionProvider(api_key=gnani_key)
+            job_ids = processing_job.provider_job_id.split(",")
+            
+            # Since this is a webhook for a single job, check if ALL jobs are completed
+            all_completed = True
+            for j_id in job_ids:
+                status_info = await provider.poll_status(j_id)
+                if str(status_info.get("status", "")).upper() != "COMPLETED":
+                    all_completed = False
+                    break
+                    
+            if not all_completed:
+                logger.info("webhook_received_but_not_all_chunks_complete", note_id=str(note.id))
+                return
+                
+            offsets = processing_job.raw_provider_response.get("offsets", [0] * len(job_ids)) if processing_job.raw_provider_response else [0] * len(job_ids)
+            all_transcripts = []
+            for j_id, offset in zip(job_ids, offsets):
+                transcript_json = await _download_transcript(provider, j_id)
+                transcript_json["_offset_ms"] = offset
+                all_transcripts.append(transcript_json)
+                
+            await _store_transcripts(db, note, processing_job, all_transcripts)
             logger.info(
-                "transcription_completed", note_id=str(note.id), provider_job_id=provider_job_id
+                "transcription_completed", note_id=str(note.id), provider_job_id=processing_job.provider_job_id
+            )
+            await create_system_log(
+                db=db,
+                user_id=note.user_id,
+                note_id=note.id,
+                level=LogLevel.INFO,
+                stage=LogStage.TRANSCRIPTION,
+                message=f"Transcription completed successfully for '{note.recording_name or note.original_filename}'."
             )
         except ProviderError as error:
             await db.rollback()
@@ -212,70 +314,127 @@ async def _download_transcript(
     return await provider.download_transcript(transcript_url)
 
 
-async def _store_transcript(
+async def _store_transcripts(
     db: AsyncSession,
     note: AudioNote,
     processing_job: ProcessingJob,
-    transcript_json: dict[str, object],
+    transcripts_json: list[dict[str, object]],
 ) -> None:
     """Replace normalized segments atomically and preserve Gnani's raw response."""
-    processing_job.raw_provider_response = transcript_json
+    processing_job.raw_provider_response = {"transcripts": transcripts_json}
     await db.execute(delete(TranscriptSegment).where(TranscriptSegment.note_id == note.id))
 
-    raw_segments = transcript_json.get("segments", [])
-    if not raw_segments and transcript_json.get("full_transcript"):
-        raw_segments = [
-            {
-                "text": transcript_json["full_transcript"],
-                "start_time": 0,
-                "end_time": transcript_json.get("duration_seconds", 0),
-            }
-        ]
-    if not isinstance(raw_segments, list):
-        raise ProviderError("Gnani returned malformed transcript segments", retryable=True)
-
-    note.resolved_language = str(transcript_json.get("language_code", ""))
-
     segments: list[TranscriptSegment] = []
-    for sequence_number, raw_segment in enumerate(raw_segments):
-        if not isinstance(raw_segment, Mapping):
-            continue
-        text = str(raw_segment.get("text", "")).strip()
-        if not text:
-            continue
-            
-        confidence = raw_segment.get("confidence")
-        if confidence is not None:
-            confidence = float(confidence)
-            
-        speaker_id = raw_segment.get("speaker_id")
-        if speaker_id is not None:
-            speaker_id = int(speaker_id)
-            
-        language_detected = raw_segment.get("language_detected")
-        if language_detected is not None:
-            language_detected = str(language_detected)
+    global_sequence = 0
+    total_duration_s = 0.0
+    first_lang = None
 
-        segments.append(
-            TranscriptSegment(
-                note_id=note.id,
-                sequence_number=sequence_number,
-                start_ms=_seconds_to_milliseconds(raw_segment.get("start_time")),
-                end_ms=_seconds_to_milliseconds(raw_segment.get("end_time")),
-                text=text,
-                speaker_id=speaker_id,
-                confidence=confidence,
-                language_detected=language_detected,
+    for t_json in transcripts_json:
+        offset_ms = t_json.get("_offset_ms", 0)
+        
+        raw_segments = t_json.get("segments", [])
+        if not raw_segments and t_json.get("full_transcript"):
+            raw_segments = [
+                {
+                    "text": t_json["full_transcript"],
+                    "start_time": 0,
+                    "end_time": t_json.get("duration_seconds", 0),
+                }
+            ]
+        
+        if not first_lang and t_json.get("language_code"):
+            first_lang = str(t_json.get("language_code", ""))
+            
+        dur = t_json.get("duration_seconds")
+        if isinstance(dur, (int, float)):
+            total_duration_s += float(dur)
+
+        for raw_segment in raw_segments:
+            if not isinstance(raw_segment, Mapping):
+                continue
+            text = str(raw_segment.get("text", "")).strip()
+            if not text:
+                continue
+                
+            confidence = raw_segment.get("confidence")
+            if confidence is not None:
+                confidence = float(confidence)
+                
+            speaker_id = raw_segment.get("speaker_id")
+            if speaker_id is not None:
+                speaker_id = int(speaker_id)
+                
+            language_detected = raw_segment.get("language_detected")
+            if language_detected is not None:
+                language_detected = str(language_detected)
+
+            start_ms = _seconds_to_milliseconds(raw_segment.get("start_time"))
+            end_ms = _seconds_to_milliseconds(raw_segment.get("end_time"))
+            
+            if start_ms is not None:
+                start_ms += offset_ms
+            if end_ms is not None:
+                end_ms += offset_ms
+
+            segments.append(
+                TranscriptSegment(
+                    note_id=note.id,
+                    sequence_number=global_sequence,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    text=text,
+                    speaker_id=speaker_id,
+                    confidence=confidence,
+                    language_detected=language_detected,
+                )
             )
-        )
+            global_sequence += 1
+            
     db.add_all(segments)
 
-    duration_seconds = transcript_json.get("duration_seconds")
-    if isinstance(duration_seconds, (int, float)):
-        note.duration_seconds = float(duration_seconds)
+    if first_lang:
+        note.resolved_language = first_lang
+    if total_duration_s > 0:
+        note.duration_seconds = total_duration_s
+        
     processing_job.status = JobStatus.COMPLETED.value
     note.status = AudioStatus.TRANSCRIPTION_COMPLETED.value
+    
+    # Emit UsageRecord for transcription
+    cost = round((total_duration_s / 60.0) * 0.45, 2) if total_duration_s > 0 else 0.0
+    usage = UsageRecord(
+        user_id=note.user_id,
+        note_id=note.id,
+        job_type="transcription",
+        original_filename=note.original_filename,
+        provider="gnani",
+        duration_seconds=total_duration_s,
+        status="completed",
+        cost=cost
+    )
+    db.add(usage)
+    
+    # Auto-generate summary
+    note.summary_status = "queued"
+    
     await db.commit()
+    
+    # Enqueue summary generation job
+    from app.workers.main import get_redis_pool
+    from app.crud.logs import create_system_log
+    from app.models.enums import LogStage, LogLevel
+    
+    redis = await get_redis_pool()
+    await redis.enqueue_job("generate_summary", note.id)
+    
+    await create_system_log(
+        db=db,
+        user_id=note.user_id,
+        note_id=note.id,
+        level=LogLevel.INFO,
+        stage=LogStage.SUMMARY,
+        message=f"AI Summary queued automatically for '{note.recording_name or note.original_filename}'.",
+    )
 
 
 def _seconds_to_milliseconds(value: object) -> int | None:
@@ -322,6 +481,15 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
             
         note.summary_status = "processing"
         await db.commit()
+        
+        await create_system_log(
+            db=db,
+            user_id=note.user_id,
+            note_id=note.id,
+            level=LogLevel.INFO,
+            stage=LogStage.SUMMARY,
+            message=f"AI Summary generation started for '{note.recording_name or note.original_filename}'."
+        )
 
         try:
             transcript = " ".join(
@@ -330,14 +498,46 @@ async def generate_summary(ctx: dict, note_id: uuid.UUID) -> None:
                     note.transcript_segments, key=lambda item: item.sequence_number
                 )
             )
-            note.summary = await GeminiSummaryProvider().summarize(transcript)
+            
+            from app.models.models import UserApiKeys
+            from app.core.security import decrypt_api_key
+            keys_result = await db.execute(select(UserApiKeys).where(UserApiKeys.user_id == note.user_id))
+            keys_record = keys_result.scalar_one_or_none()
+            
+            gemini_key = None
+            if keys_record and not keys_record.use_default_gemini:
+                gemini_key = decrypt_api_key(keys_record.encrypted_gemini_key)
+                
+            note.summary = await GeminiSummaryProvider(api_key=gemini_key).summarize(transcript)
             processing_job.status = JobStatus.COMPLETED.value
             note.summary_status = "completed"
             from datetime import datetime
             from datetime import timezone
             note.summary_completed_at = datetime.now(timezone.utc)
+            
+            # Emit UsageRecord for summary
+            usage = UsageRecord(
+                user_id=note.user_id,
+                note_id=note.id,
+                job_type="summary",
+                original_filename=note.original_filename,
+                provider="gemini",
+                duration_seconds=note.duration_seconds,
+                status="completed",
+                cost=0.0 # Summaries are currently considered 0 cost, or logic can be added later
+            )
+            db.add(usage)
+            
             await db.commit()
             logger.info("summary_completed", note_id=str(note.id))
+            await create_system_log(
+                db=db,
+                user_id=note.user_id,
+                note_id=note.id,
+                level=LogLevel.INFO,
+                stage=LogStage.SUMMARY,
+                message=f"AI Summary completed successfully for '{note.recording_name or note.original_filename}'."
+            )
         except SummaryProviderError as error:
             await db.rollback()
             await _handle_job_failure(
@@ -385,6 +585,18 @@ async def _handle_job_failure(
         await db.commit()
         delay_seconds = RETRY_DELAYS[attempt - 1]
         logger.info("job_retrying", note_id=str(note.id), stage=stage, delay_seconds=delay_seconds)
+        
+        stage_enum = LogStage.SUMMARY if stage == "summary" else LogStage.TRANSCRIPTION
+        await create_system_log(
+            db=db,
+            user_id=note.user_id,
+            note_id=note.id,
+            level=LogLevel.WARNING,
+            stage=stage_enum,
+            message=f"{stage.capitalize()} encountered an error for '{note.recording_name or note.original_filename}'. Retrying in {delay_seconds} seconds.",
+            details={"error": error_message, "type": type(error).__name__, "retryable": True}
+        )
+        
         raise Retry(defer=delay_seconds)
 
     processing_job.status = JobStatus.FAILED.value
@@ -400,3 +612,28 @@ async def _handle_job_failure(
     logger.error(
         "job_terminal_failure", note_id=str(note.id), stage=stage, error_type=type(error).__name__
     )
+    
+    stage_enum = LogStage.SUMMARY if stage == "summary" else LogStage.TRANSCRIPTION
+    await create_system_log(
+        db=db,
+        user_id=note.user_id,
+        note_id=note.id,
+        level=LogLevel.ERROR,
+        stage=stage_enum,
+        message=f"{stage.capitalize()} failed permanently for '{note.recording_name or note.original_filename}': {error_message[:200]}",
+        details={"error": error_message, "type": type(error).__name__, "retryable": False}
+    )
+    
+    # Emit UsageRecord for failure
+    usage = UsageRecord(
+        user_id=note.user_id,
+        note_id=note.id,
+        job_type=stage,
+        original_filename=note.original_filename,
+        provider="gnani" if stage == "transcription" else "gemini",
+        duration_seconds=note.duration_seconds, # May be None if failed early
+        status="failed",
+        cost=0.0 # Failed jobs do not cost credits
+    )
+    db.add(usage)
+    await db.commit()

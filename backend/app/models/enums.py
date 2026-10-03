@@ -40,3 +40,21 @@ class JobStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class LogLevel(str, enum.Enum):
+    """Severity level of a system log."""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class LogStage(str, enum.Enum):
+    """The stage of the pipeline the log is associated with."""
+
+    UPLOAD = "upload"
+    STORAGE = "storage"
+    TRANSCRIPTION = "transcription"
+    SUMMARY = "summary"
+    SYSTEM = "system"

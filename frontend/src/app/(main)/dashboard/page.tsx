@@ -21,6 +21,7 @@ interface UsageData {
     total_duration_seconds: number;
     completed_requests: number;
     failed_requests: number;
+    total_cost: number;
   };
   daily_usage: {
     date: string;
@@ -182,7 +183,7 @@ export default function Dashboard() {
         <div className="space-y-8">
           
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             <div className={`${cardStyle} p-6 flex flex-col`}>
               <h3 className="text-sm font-semibold text-gray-500 tracking-wide uppercase">Transcription Minutes</h3>
               <div className="mt-2 flex items-baseline gap-2">
@@ -190,6 +191,15 @@ export default function Dashboard() {
                   {data.summary.total_duration_seconds > 0 ? (data.summary.total_duration_seconds / 60).toFixed(1) : "0"}
                 </span>
                 <span className="text-sm font-medium text-gray-500">min</span>
+              </div>
+            </div>
+
+            <div className={`${cardStyle} p-6 flex flex-col`}>
+              <h3 className="text-sm font-semibold text-gray-500 tracking-wide uppercase">Total Billing</h3>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-4xl font-bold tracking-tight text-gray-900">
+                  ₹{data.summary.total_cost != null ? data.summary.total_cost.toFixed(2) : "0.00"}
+                </span>
               </div>
             </div>
             

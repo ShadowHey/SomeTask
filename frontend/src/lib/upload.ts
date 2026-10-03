@@ -46,6 +46,18 @@ export async function uploadAudioFile(
     const noteId = uuidv4();
     const fileExtension = file.name.split('.').pop();
     const storagePath = `users/${user.id}/${noteId}.${fileExtension}`;
+    
+    // Log initiation
+    try {
+      await api.logs.create({
+        level: "info",
+        stage: "storage",
+        message: `Audio upload to storage started for '${file.name}'`,
+        note_id: noteId
+      });
+    } catch (e) {
+      console.error("Failed to log start", e);
+    }
 
     // 2. Insert into DB
     onProgress?.({ status: "uploading", progress: 10, message: "Creating record..." });
@@ -80,6 +92,18 @@ export async function uploadAudioFile(
       throw new Error(`Upload failed: ${uploadError.message}`);
     }
 
+    // Log success
+    try {
+      await api.logs.create({
+        level: "info",
+        stage: "storage",
+        message: `Audio uploaded to storage successfully`,
+        note_id: noteId
+      });
+    } catch (e) {
+      console.error("Failed to log success", e);
+    }
+
     // 4. Update status in DB
     onProgress?.({ status: "completing", progress: 90, message: "Finalizing..." });
     const { error: finalizationError } = await supabase
@@ -97,6 +121,18 @@ export async function uploadAudioFile(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error occurred";
     onProgress?.({ status: "error", progress: 0, message });
+    
+    // Log failure
+    try {
+      await api.logs.create({
+        level: "error",
+        stage: "storage",
+        message: `Audio upload to storage failed: ${message}`
+      });
+    } catch (e) {
+      console.error("Failed to log error", e);
+    }
+    
     throw error;
   }
 }

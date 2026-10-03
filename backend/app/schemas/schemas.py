@@ -26,6 +26,20 @@ class ProfileUpdateRequest(BaseModel):
     username: Optional[str] = Field(None, min_length=3, max_length=30)
     avatar_id: Optional[str] = None
 
+class ApiKeyProviderConfig(BaseModel):
+    has_custom_key: bool
+    use_default: bool
+
+class ApiKeysConfigResponse(BaseModel):
+    gemini: ApiKeyProviderConfig
+    gnani: ApiKeyProviderConfig
+
+class ApiKeysUpdateRequest(BaseModel):
+    gemini_api_key: Optional[str] = None
+    gnani_api_key: Optional[str] = None
+    use_default_gemini: Optional[bool] = None
+    use_default_gnani: Optional[bool] = None
+
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
@@ -191,3 +205,28 @@ class ReadyResponse(BaseModel):
     status: str
     database: str
     redis: str
+
+# ── System Logs ──────────────────────────────────────────────────────────────
+
+class SystemLogCreate(BaseModel):
+    note_id: Optional[uuid.UUID] = None
+    level: str
+    stage: str
+    message: str
+    details: Optional[dict] = None
+
+class SystemLogResponse(BaseModel):
+    id: uuid.UUID
+    note_id: Optional[uuid.UUID]
+    level: str
+    stage: str
+    message: str
+    details: Optional[dict]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SystemLogListResponse(BaseModel):
+    items: list[SystemLogResponse]
+    total: int

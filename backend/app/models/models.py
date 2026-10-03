@@ -32,7 +32,7 @@ class Profile(Base):
     # References auth.users(id)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True, unique=True)
     
-    username: Mapped[Optional[str]] = mapped_column(Text, nullable=True, unique=True)
+    username: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     avatar_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -172,4 +172,68 @@ class Tag(Base):
 
     recordings: Mapped[list[AudioNote]] = relationship(
         secondary=audio_note_tags, back_populates="tags"
+    )
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    note_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("audio_notes.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True
+    )
+    
+    level: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    note: Mapped[Optional[AudioNote]] = relationship()
+
+class UserApiKeys(Base):
+    __tablename__ = "user_api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True, unique=True)
+
+    encrypted_gnani_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    encrypted_gemini_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    use_default_gnani: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True, server_default=sa.sql.expression.true())
+    use_default_gemini: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True, server_default=sa.sql.expression.true())
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    note_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("audio_notes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

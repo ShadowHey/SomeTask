@@ -80,6 +80,13 @@ export function TopBar() {
                           Profile
                         </Link>
                         <Link
+                          href="/logs"
+                          onClick={() => setIsDropdownOpen(false)}
+                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          System Logs
+                        </Link>
+                        <Link
                           href="#"
                           onClick={() => setIsDropdownOpen(false)}
                           className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"

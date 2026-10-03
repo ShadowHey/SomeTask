@@ -1,6 +1,5 @@
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { OnboardingModal } from "@/components/OnboardingModal";
 
 export default function MainLayout({
   children,
@@ -18,7 +17,6 @@ export default function MainLayout({
           </div>
         </main>
       </div>
-      <OnboardingModal />
     </div>
   );
 }

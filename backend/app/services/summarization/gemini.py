@@ -1,6 +1,6 @@
 """Gemini summarization provider adapter."""
 
-from typing import Protocol
+from typing import Protocol, Optional
 
 from google import genai
 from google.genai.errors import APIError
@@ -28,9 +28,9 @@ class SummaryProvider(Protocol):
 class GeminiSummaryProvider:
     """Adapter for Google Gemini summarization."""
 
-    def __init__(self) -> None:
-        self.api_key = settings.gemini_api_key
-        self.model = settings.gemini_model
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        self.api_key = api_key or settings.gemini_api_key
+        self.model = "gemini-3.5-flash"
 
         # We don't initialize the client until needed to avoid
         # startup errors if the key isn't provided (e.g. during tests/build)

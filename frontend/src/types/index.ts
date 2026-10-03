@@ -69,3 +69,18 @@ export interface TranscriptSearchResponse {
   results: TranscriptSearchResult[];
   total: number;
 }
+
+export interface SystemLog {
+  id: string;
+  note_id: string | null;
+  level: "info" | "warning" | "error";
+  stage: "upload" | "storage" | "transcription" | "summary" | "system";
+  message: string;
+  details: Record<string, any> | null;
+  created_at: string;
+}
+
+export interface SystemLogListResponse {
+  items: SystemLog[];
+  total: number;
+}

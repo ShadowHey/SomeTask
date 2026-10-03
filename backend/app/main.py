@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, profiles, recordings, tags, usage, webhooks
+from app.api.routes import health, profiles, recordings, tags, usage, webhooks, logs, ask_ai
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
 
@@ -46,4 +46,6 @@ app.include_router(profiles.router, prefix="/api/profile")
 app.include_router(recordings.router, prefix="/api/recordings")
 app.include_router(tags.router, prefix="/api/tags")
 app.include_router(usage.router, prefix="/api/usage")
+app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+app.include_router(ask_ai.router, prefix="/api/recordings", tags=["ask_ai"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])

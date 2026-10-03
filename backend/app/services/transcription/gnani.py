@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, Optional
 
 import asyncio
 import httpx
@@ -47,11 +47,12 @@ class GnaniTranscriptionProvider:
     def __init__(
         self,
         *,
-        transport: httpx.AsyncBaseTransport | None = None,
-        timeout: httpx.Timeout | None = None,
+        api_key: Optional[str] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
+        timeout: Optional[httpx.Timeout] = None,
     ) -> None:
         self.base_url = settings.gnani_base_url.rstrip("/")
-        self.api_key = settings.gnani_api_key
+        self.api_key = api_key or settings.gnani_api_key
         self.model = settings.gnani_model
         self.transport = transport
         self.timeout = timeout or httpx.Timeout(30.0, connect=10.0)

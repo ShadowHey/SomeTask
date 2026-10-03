@@ -9,17 +9,17 @@ export class ApiError extends Error {
   }
 }
 
-// Global variable to hold the Supabase JWT token injected by the AuthProvider
-let currentApiToken: string | null = null;
+import { createClient } from "./supabase";
 
-export const setApiToken = (token: string | null) => {
-  currentApiToken = token;
-};
+// Removed global currentApiToken and setApiToken
 
 async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  if (currentApiToken) {
-    headers.set("Authorization", `Bearer ${currentApiToken}`);
+  const supabase = createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  
+  if (session?.access_token) {
+    headers.set("Authorization", `Bearer ${session.access_token}`);
   }
 
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
@@ -72,6 +72,11 @@ export const api = {
       fetchApi<void>(`/recordings/${id}`, { method: "DELETE" }),
     searchTranscript: (id: string, query: string) =>
       fetchApi<TranscriptSearchResponse>(`/recordings/${id}/search?q=${encodeURIComponent(query)}`),
+    askQuestion: (id: string, question: string) =>
+      fetchApi<{ answer: string }>(`/recordings/${id}/ask`, {
+        method: "POST",
+        body: JSON.stringify({ question }),
+      }),
   },
   profile: {
     get: () => fetchApi<any>("/profile"),
@@ -80,6 +85,13 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(data),
       }),
+    getKeys: () => fetchApi<any>("/profile/keys"),
+    updateKeys: (data: { gemini_api_key?: string | null; gnani_api_key?: string | null; use_default_gemini?: boolean | null; use_default_gnani?: boolean | null; }) =>
+      fetchApi<any>("/profile/keys", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    removeKeys: () => fetchApi<any>("/profile/keys", { method: "DELETE" }),
   },
   tags: {
     list: () => fetchApi<any[]>("/tags"),
@@ -96,4 +108,20 @@ export const api = {
       return fetchApi<any>(`/usage${query}`);
     }
   },
+  logs: {
+    list: (params?: { level?: string; limit?: number; offset?: number }) => {
+      const urlParams = new URLSearchParams();
+      if (params?.level) urlParams.append("level", params.level);
+      if (params?.limit) urlParams.append("limit", params.limit.toString());
+      if (params?.offset) urlParams.append("offset", params.offset.toString());
+      
+      const query = urlParams.toString() ? `?${urlParams.toString()}` : "";
+      return fetchApi<import("../types").SystemLogListResponse>(`/logs${query}`);
+    },
+    create: (data: { level: string; stage: string; message: string; details?: any; note_id?: string }) =>
+      fetchApi<any>("/logs", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  }
 };
